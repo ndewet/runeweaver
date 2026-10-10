@@ -49,6 +49,99 @@ pub(crate) fn emit(
             })
         })
         .collect();
+    let selectors: Vec<_> = (0..dfa.state_count())
+        .map(|index| {
+            let state = crate::automata::StateId::new(index);
+            let transitions = dfa.transitions(state);
+            let accept = dfa.accept(state).map(|rule| {
+                let rule = rule.index();
+                quote! { latest = Some((#rule, index)); }
+            });
+            let self_transitions: Vec<_> = transitions
+                .iter()
+                .filter(|transition| transition.target == state)
+                .collect();
+            let fast_loop = (!self_transitions.is_empty()).then(|| {
+                let table = (u8::MIN..=u8::MAX).map(|byte| {
+                    self_transitions.iter().any(|transition| {
+                        (transition.label.low..=transition.label.high).contains(&byte)
+                    })
+                });
+                let tests = (0usize..8).map(|offset| {
+                    quote! {
+                        if SELF_LOOP[bytes[#offset] as usize] == 0 {
+                            index += #offset;
+                            break 'fast;
+                        }
+                    }
+                });
+                quote! {
+                    const SELF_LOOP: &[u8; 256] = &[#(#table as u8),*];
+                    'fast: while index + 8 <= input.len() {
+                        let bytes: &[u8; 8] = input[index..index + 8]
+                            .try_into()
+                            .expect("an eight-byte slice has eight bytes");
+                        #(#tests)*
+                        index += 8;
+                    }
+                    while index < input.len() && SELF_LOOP[input[index] as usize] != 0 {
+                        index += 1;
+                    }
+                    #accept
+                }
+            });
+            let other_transitions: Vec<_> = transitions
+                .iter()
+                .filter(|transition| transition.target != state)
+                .collect();
+            let fork = if other_transitions.len() > 2 {
+                let dead = dfa.state_count();
+                let table = (u8::MIN..=u8::MAX).map(|byte| {
+                    other_transitions
+                        .iter()
+                        .find(|transition| {
+                            (transition.label.low..=transition.label.high).contains(&byte)
+                        })
+                        .map_or(dead, |transition| transition.target.index())
+                });
+                quote! {
+                    const FORK: &[usize; 256] = &[#(#table),*];
+                    let next = FORK[byte as usize];
+                    if next != #dead {
+                        state = next;
+                        index += 1;
+                        continue 'scan;
+                    }
+                }
+            } else {
+                let branches = other_transitions.iter().map(|transition| {
+                    let low = transition.label.low;
+                    let high = transition.label.high;
+                    let target = transition.target.index();
+                    quote! {
+                        if (#low..=#high).contains(&byte) {
+                            state = #target;
+                            index += 1;
+                            continue 'scan;
+                        }
+                    }
+                });
+                quote! { #(#branches)* }
+            };
+            quote! {
+                #index => {
+                    #accept
+                    #fast_loop
+                    if index == input.len() {
+                        return latest;
+                    }
+                    let byte = input[index];
+                    #fork
+                    return latest;
+                }
+            }
+        })
+        .collect();
     let actions: Vec<_> = lexer
         .rules()
         .iter()
@@ -108,6 +201,21 @@ pub(crate) fn emit(
             }
         }
 
+        fn __runeweaver_select(
+            input: &[u8],
+            start_condition: usize,
+        ) -> Option<(usize, usize)> {
+            let mut state = Self::__runeweaver_start(start_condition)?;
+            let mut index = 0;
+            let mut latest = None;
+            'scan: loop {
+                match state {
+                    #(#selectors)*
+                    _ => return latest,
+                }
+            }
+        }
+
         fn __runeweaver_action(
             rule: usize,
             text: &str,
@@ -158,6 +266,7 @@ mod tests {
         assert!(actual.contains("fn __runeweaver_mode_name"));
         assert!(actual.contains("fn __runeweaver_transition"));
         assert!(actual.contains("fn __runeweaver_accept"));
+        assert!(actual.contains("fn __runeweaver_select"));
     }
 
     #[test]

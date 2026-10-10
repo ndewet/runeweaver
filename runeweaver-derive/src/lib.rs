@@ -49,6 +49,7 @@ use syn::{
 /// #     fn start_state(mode: usize) -> Option<usize>;
 /// #     fn next_state(state: usize, byte: u8) -> Option<usize>;
 /// #     fn accepting_rule(state: usize) -> Option<usize>;
+/// #     fn scan_one(input: &str, mode: usize) -> Option<RuleScan<Self>>;
 /// #     fn run_action(rule: usize, text: &str) -> Result<(Option<Self>, Transition), PayloadError>;
 /// #     fn mode_name(mode: usize) -> &'static str;
 /// # }
@@ -191,6 +192,15 @@ fn derive_lexer_inner(input: DeriveInput) -> Result<proc_macro2::TokenStream> {
 
             fn accepting_rule(state: usize) -> Option<usize> {
                 Self::__runeweaver_accept(state)
+            }
+
+            fn scan_one(input: &str, mode: usize) -> Option<#runtime::RuleScan<Self>> {
+                let (rule, length) = Self::__runeweaver_select(input.as_bytes(), mode)?;
+                Some(
+                    Self::__runeweaver_action(rule, &input[..length])
+                        .map(|(token, transition)| (token, length, transition))
+                        .map_err(|error| (error, length)),
+                )
             }
 
             fn run_action(
