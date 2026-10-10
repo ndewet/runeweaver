@@ -1,72 +1,55 @@
-//! Renders minimized lexer automata as Rust source.
+//! Renders completed lexer execution plans as Rust source.
 
-use crate::automata::{dfa::Dfa, encoding::ByteRange};
-use crate::lexer::{Lexer, ResolvedTransition, RuleId};
+use crate::ir::Matcher;
+use crate::lexer::{Lexer, ResolvedTransition};
 use proc_macro2::TokenStream;
 use quote::quote;
 
-/// Renders a minimized byte-oriented lexer DFA as Rust matcher tokens.
-pub(crate) fn emit(
-    dfa: &Dfa<ByteRange, RuleId>,
-    lexer: &Lexer,
-    runtime: &TokenStream,
-) -> TokenStream {
-    let starts: Vec<_> = dfa
-        .start_states()
+/// Renders a completed execution plan as Rust matcher tokens.
+pub(crate) fn emit(matcher: &Matcher, lexer: &Lexer, runtime: &TokenStream) -> TokenStream {
+    let starts: Vec<_> = matcher
+        .starts
         .iter()
         .enumerate()
         .map(|(index, state)| {
-            let state = state.index();
             quote! { #index => Some(#state), }
         })
         .collect();
-    let transitions: Vec<_> = (0..dfa.state_count())
-        .filter_map(|index| {
-            let state = crate::automata::StateId::new(index);
-            let transitions = dfa.transitions(state);
-            (!transitions.is_empty()).then(|| {
-                let arms = transitions.iter().map(|transition| {
-                    let low = transition.label.low;
-                    let high = transition.label.high;
-                    let target = transition.target.index();
-                    quote! { #low..=#high => Some(#target), }
-                });
-                quote! {
-                    #index => match byte {
-                        #(#arms)*
-                        _ => None,
-                    },
-                }
-            })
-        })
-        .collect();
-    let accepts: Vec<_> = (0..dfa.state_count())
-        .filter_map(|index| {
-            let state = crate::automata::StateId::new(index);
-            dfa.accept(state).map(|accept| {
-                let accept = accept.index();
-                quote! { #index => Some(#accept), }
-            })
-        })
-        .collect();
-    let selector = super::selector::emit(dfa);
-    let fused_skips = lexer
-        .rules()
+    let transitions: Vec<_> = matcher
+        .transitions
         .iter()
-        .enumerate()
-        .filter(|(_, rule)| {
-            rule.action().is_skip() && matches!(rule.transition(), ResolvedTransition::Stay)
-        })
-        .map(|(index, _)| {
+        .map(|(index, transitions)| {
+            let arms = transitions.iter().map(|(range, target)| {
+                let low = range.low;
+                let high = range.high;
+                quote! { #low..=#high => Some(#target), }
+            });
             quote! {
-                #index if length != 0 => {
-                    offset = end;
-                    if offset == input.len() {
-                        return Some(Ok((None, offset, #runtime::Transition::Stay)));
-                    }
+                #index => match byte {
+                    #(#arms)*
+                    _ => None,
+                },
+            }
+        })
+        .collect();
+    let accepts: Vec<_> = matcher
+        .accepts
+        .iter()
+        .map(|(index, accept)| {
+            quote! { #index => Some(#accept), }
+        })
+        .collect();
+    let selector = super::selector::emit(&matcher.selector);
+    let fused_skips = matcher.fused_skips.iter().map(|index| {
+        quote! {
+            #index if length != 0 => {
+                offset = end;
+                if offset == input.len() {
+                    return Some(Ok((None, offset, #runtime::Transition::Stay)));
                 }
             }
-        });
+        }
+    });
     let actions: Vec<_> = lexer
         .rules()
         .iter()
@@ -178,26 +161,20 @@ pub(crate) fn emit(
     }
 }
 
-pub(super) fn local_width(dead: usize) -> TokenStream {
-    if u8::try_from(dead).is_ok() {
-        quote!(u8)
-    } else if u16::try_from(dead).is_ok() {
-        quote!(u16)
-    } else if u32::try_from(dead).is_ok() {
-        quote!(u32)
-    } else {
-        quote!(usize)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::automata::dfa::Builder;
-    use crate::lexer::{Rule, RuleAction, StartCondition};
+    use crate::automata::{
+        dfa::{Builder, Dfa},
+        encoding::ByteRange,
+    };
+    use crate::lexer::{Rule, RuleAction, RuleId, StartCondition};
     use crate::regex::Expression;
     use std::str::FromStr;
 
+    fn emit(dfa: &Dfa<ByteRange, RuleId>, lexer: &Lexer, runtime: &TokenStream) -> TokenStream {
+        super::emit(&Matcher::new(dfa, []), lexer, runtime)
+    }
     fn lexer(action: TokenStream) -> Lexer {
         Lexer::new(
             vec![Rule::new(
@@ -208,74 +185,6 @@ mod tests {
             )],
             vec![StartCondition::new("INITIAL")],
         )
-    }
-
-    #[test]
-    fn local_width_includes_the_dead_value() {
-        for (dead, expected) in [
-            (0, "u8"),
-            (255, "u8"),
-            (256, "u16"),
-            (65535, "u16"),
-            (65536, "u32"),
-            (u32::MAX as usize, "u32"),
-        ] {
-            assert_eq!(local_width(dead).to_string(), expected);
-        }
-        #[cfg(target_pointer_width = "64")]
-        assert_eq!(local_width(u32::MAX as usize + 1).to_string(), "usize");
-    }
-
-    #[test]
-    fn direct_transitions_inline_final_accepts() {
-        let mut builder: Builder<ByteRange, RuleId> = Builder::new();
-        let start = builder.add_state();
-        let target = builder.add_state();
-        builder.add_transition(start, ByteRange::new(b'a', b'z'), target);
-        builder.set_accept(target, RuleId::new(0));
-        let dfa = builder.build(&[start]).expect("the test DFA is valid");
-        let emitted = emit(&dfa, &lexer(quote!(Rule::Token(7))), &quote!(::runeweaver)).to_string();
-        assert!(emitted.contains("return Some ((:: core :: num :: NonZeroUsize :: new (1usize)"));
-        assert!(!emitted.contains("latest = Some"));
-        assert!(!emitted.contains("fn __runeweaver_state_"));
-    }
-
-    #[test]
-    fn local_forks_select_all_targets_and_return_the_saved_match_on_failure() {
-        let mut builder: Builder<ByteRange, RuleId> = Builder::new();
-        let start = builder.add_state();
-        for byte in b'a'..=b'c' {
-            let target = builder.add_state();
-            builder.add_transition(start, ByteRange::new(byte, byte), target);
-            builder.set_accept(target, RuleId::new(usize::from(byte - b'a')));
-        }
-        let dfa = builder.build(&[start]).expect("the test DFA is valid");
-        let emitted = emit(&dfa, &lexer(quote!(Rule::Token(7))), &quote!(::runeweaver)).to_string();
-        assert!(emitted.contains("const FORK : & [u8 ; 256]"));
-        for ordinal in 0..3 {
-            assert!(emitted.contains(&format!(
-                "{ordinal} => {{ return Some ((:: core :: num :: NonZeroUsize :: new ({}usize)",
-                ordinal + 1
-            )));
-        }
-        assert!(emitted.contains("3usize as u8"));
-        assert!(
-            emitted.contains("_ => return None :: < (:: core :: num :: NonZeroUsize , usize) >")
-        );
-        assert!(!emitted.contains("let next"));
-    }
-
-    #[test]
-    fn start_conditions_call_their_regions() {
-        let mut builder: Builder<ByteRange, RuleId> = Builder::new();
-        let first = builder.add_state();
-        let second = builder.add_state();
-        let dfa = builder
-            .build(&[second, first])
-            .expect("the test DFA is valid");
-        let emitted = emit(&dfa, &lexer(quote!(Rule::Token(7))), &quote!(::runeweaver)).to_string();
-        assert!(emitted.contains("0usize => Self :: __runeweaver_region_1 (input , 0)"));
-        assert!(emitted.contains("1usize => Self :: __runeweaver_region_0 (input , 0)"));
     }
 
     #[test]

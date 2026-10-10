@@ -12,6 +12,7 @@
 // The derive entry point will use these modules when the lexer pipeline exists.
 mod automata;
 mod emitter;
+mod ir;
 mod lexer;
 mod regex;
 

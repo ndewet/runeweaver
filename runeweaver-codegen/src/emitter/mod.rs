@@ -1,12 +1,10 @@
-//! Emits Rust source for minimized lexer automata.
+//! Renders completed lexer execution plans as Rust source.
 //!
-//! This module owns generated matcher layout and source rendering. Automaton
-//! construction and minimization remain in [`crate::automata`].
+//! Execution planning belongs to [`crate::ir`]. This module owns Rust syntax,
+//! generated identifiers, and token construction.
 
-mod cycles;
 #[allow(clippy::module_inception)]
 mod emitter;
-mod regions;
 mod selector;
 
 pub(crate) use self::emitter::emit;

@@ -1,15 +1,9 @@
 //! Groups DFA cycles and shared paths into execution regions.
 
+use super::context::Context;
 use crate::automata::{StateId, dfa::Dfa, encoding::ByteRange};
 use crate::lexer::RuleId;
 use std::collections::{BTreeSet, VecDeque};
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum Context {
-    Empty,
-    Fixed { rule: usize, optional: bool },
-    General,
-}
 
 #[derive(Debug)]
 pub(super) struct Region {
@@ -158,7 +152,7 @@ impl Regions {
             let mut id = owner[source];
             for member in path.into_iter().rev() {
                 depth[member] = depth[source] + 1;
-                if depth[member] == 64 {
+                if depth[member] == super::limits::MAX_INLINE_DEPTH {
                     id = regions.len();
                     depth[member] = 0;
                     regions.push(Region {

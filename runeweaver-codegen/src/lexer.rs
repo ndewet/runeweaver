@@ -457,7 +457,14 @@ impl Lexer {
     /// Emits this lexer as one private matcher method.
     fn emit(&self, runtime: &TokenStream) -> Result<TokenStream, CompileError> {
         let dfa = self.compile_automaton()?;
-        Ok(emitter::emit(&dfa, self, runtime))
+        let matcher = crate::ir::Matcher::new(
+            &dfa,
+            self.rules().iter().map(|rule| crate::ir::RuleEffect {
+                skips: rule.action().is_skip(),
+                transition: rule.transition(),
+            }),
+        );
+        Ok(emitter::emit(&matcher, self, runtime))
     }
 }
 

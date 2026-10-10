@@ -36,7 +36,7 @@ pub(super) fn headers(dfa: &Dfa<ByteRange, RuleId>, region: &Region) -> Vec<usiz
             continue;
         }
         let mut source = header;
-        for _ in 0..8 {
+        for _ in 0..super::limits::MAX_SHARED_TAIL {
             let transitions = dfa.transitions(StateId::new(source));
             let targets: BTreeSet<_> = transitions.iter().map(|edge| edge.target.index()).collect();
             if targets.len() != 1 || targets.contains(&source) {
@@ -84,7 +84,7 @@ pub(super) fn headers(dfa: &Dfa<ByteRange, RuleId>, region: &Region) -> Vec<usiz
                 .expect("the target belongs to the region");
             *remaining -= 1;
             if *remaining == 0 {
-                if *target_depth >= 64 {
+                if *target_depth >= super::limits::MAX_INLINE_DEPTH {
                     headers.insert(target);
                     *target_depth = 0;
                 }

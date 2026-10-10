@@ -1,39 +1,22 @@
-//! Emits region-local loops and acyclic control flow.
+//! Renders completed selector control flow as Rust source.
 
-use super::regions::{Context, Regions};
-use crate::automata::{StateId, dfa::Dfa, encoding::ByteRange};
-use crate::lexer::RuleId;
+use crate::ir::{
+    Argument, Block, Call, Context, Dispatch, Function, FunctionBody, MatchValue, Position,
+    Selector, Transfer, Width,
+};
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
-use std::collections::BTreeMap;
 
-pub(super) fn emit(dfa: &Dfa<ByteRange, RuleId>) -> TokenStream {
-    let regions = Regions::new(dfa);
-    let headers = regions
-        .regions
-        .iter()
-        .map(|region| {
-            if region.cyclic && region.states.len() > 1 {
-                super::cycles::headers(dfa, region)
-            } else {
-                region.entries.clone()
-            }
-        })
-        .collect();
-    let generator = Selector {
-        dfa,
-        regions,
-        headers,
-    };
-    let starts = dfa.start_states().iter().enumerate().map(|(mode, state)| {
-        let call = generator.call(
-            state.index(),
-            &quote!(None::<(::core::num::NonZeroUsize, usize)>),
-            &quote!(0),
-        );
+pub(super) fn emit(selector: &Selector) -> TokenStream {
+    let starts = selector.starts.iter().enumerate().map(|(mode, start)| {
+        let call = call(start);
         quote! { #mode => #call, }
     });
-    let functions = (0..generator.regions.regions.len()).map(|id| generator.function(id));
+    let functions = selector
+        .functions
+        .iter()
+        .enumerate()
+        .map(|(id, plan)| function(id, plan));
     quote! {
         fn __runeweaver_select(input: &[u8], start_condition: usize) -> Option<(::core::num::NonZeroUsize, usize)> {
             match start_condition {
@@ -45,87 +28,33 @@ pub(super) fn emit(dfa: &Dfa<ByteRange, RuleId>) -> TokenStream {
     }
 }
 
-struct Selector<'a> {
-    dfa: &'a Dfa<ByteRange, RuleId>,
-    regions: Regions,
-    headers: Vec<Vec<usize>>,
-}
-
-impl Selector<'_> {
-    fn function(&self, id: usize) -> TokenStream {
-        let region = &self.regions.regions[id];
-        let name = format_ident!("__runeweaver_region_{id}");
-        let changes_context = region.cyclic
-            && (self.headers[id].len() < region.states.len()
-                && self.headers[id]
-                    .iter()
-                    .any(|&state| self.dfa.accept(StateId::new(state)).is_none())
-                || region.states.iter().any(|&state| {
-                    self.dfa.accept(StateId::new(state)).is_some()
-                        && self
-                            .dfa
-                            .transitions(StateId::new(state))
-                            .iter()
-                            .any(|edge| {
-                                self.regions.owner[edge.target.index()] == id
-                                    && self.dfa.accept(edge.target).is_none()
-                            })
-                }));
-        let context_mut = changes_context.then(|| quote!(mut));
-        let context_parameter = match region.context {
-            Context::Empty => quote!(),
-            Context::Fixed {
-                optional: false, ..
-            } => quote!(, #context_mut saved_end: usize),
-            Context::Fixed { optional: true, .. } => {
-                quote!(, #context_mut saved_end: Option<usize>)
-            }
-            Context::General => {
-                quote!(, #context_mut latest: Option<(::core::num::NonZeroUsize, usize)>)
-            }
-        };
-        let saved = match region.context {
-            Context::Empty => quote!(None::<(::core::num::NonZeroUsize, usize)>),
-            Context::Fixed {
-                rule,
-                optional: false,
-            } => {
-                let rule = rule_tag(rule);
-                quote!(Some((#rule, saved_end)))
-            }
-            Context::Fixed {
-                rule,
-                optional: true,
-            } => {
-                let rule = rule_tag(rule);
-                quote!(saved_end.map(|end| (#rule, end)))
-            }
-            Context::General => quote!(latest),
-        };
-        let index_mut = region
-            .states
-            .iter()
-            .any(|&state| !self.dfa.transitions(StateId::new(state)).is_empty())
-            .then(|| quote!(mut));
-        let multi_entry = region.cyclic && region.entries.len() != 1;
-        let entry_parameter = multi_entry.then(|| quote!(, mut state: usize));
-        let body = if region.cyclic && region.states.len() > 1 && self.headers[id].len() == 1 {
-            let code = self.state(id, self.headers[id][0], &saved);
+fn function(id: usize, plan: &Function) -> TokenStream {
+    let name = format_ident!("__runeweaver_region_{id}");
+    let context_mut = plan.mutable_context.then(|| quote!(mut));
+    let context_parameter = match plan.context {
+        Context::Empty => quote!(),
+        Context::Fixed {
+            optional: false, ..
+        } => quote!(, #context_mut saved_end: usize),
+        Context::Fixed { optional: true, .. } => quote!(, #context_mut saved_end: Option<usize>),
+        Context::General => {
+            quote!(, #context_mut latest: Option<(::core::num::NonZeroUsize, usize)>)
+        }
+    };
+    let index_mut = plan.mutable_index.then(|| quote!(mut));
+    let entry_parameter = plan.entry_parameter.then(|| quote!(, mut state: usize));
+    let body = match &plan.body {
+        FunctionBody::Linear(code) => block(code),
+        FunctionBody::Loop(code) => {
+            let code = block(code);
             quote! { 'region: loop { #code } }
-        } else if region.cyclic && region.states.len() > 1 {
-            let init = (!multi_entry).then(|| {
-                let state = self.headers[id]
-                    .binary_search(&region.entries[0])
-                    .expect("the region contains its entry");
-                quote!(let mut state = #state;)
+        }
+        FunctionBody::Dispatch { initial, arms } => {
+            let init = initial.map(|state| quote!(let mut state = #state;));
+            let arms = arms.iter().enumerate().map(|(ordinal, code)| {
+                let code = block(code);
+                quote! { #ordinal => { #code }, }
             });
-            let arms = self.headers[id]
-                .iter()
-                .enumerate()
-                .map(|(ordinal, &state)| {
-                    let code = self.state(id, state, &saved);
-                    quote! { #ordinal => { #code }, }
-                });
             quote! {
                 #init
                 'region: loop {
@@ -135,208 +64,139 @@ impl Selector<'_> {
                     }
                 }
             }
-        } else {
-            self.state(id, region.entries[0], &saved)
-        };
-        quote! {
-            fn #name(input: &[u8], #index_mut index: usize #context_parameter #entry_parameter)
-                -> Option<(::core::num::NonZeroUsize, usize)>
-            {
-                #body
-            }
+        }
+    };
+    quote! {
+        fn #name(input: &[u8], #index_mut index: usize #context_parameter #entry_parameter)
+            -> Option<(::core::num::NonZeroUsize, usize)>
+        {
+            #body
         }
     }
+}
 
-    fn call(&self, state: usize, saved: &TokenStream, index: &TokenStream) -> TokenStream {
-        let id = self.regions.owner[state];
-        let region = &self.regions.regions[id];
-        let name = format_ident!("__runeweaver_region_{id}");
-        let context = match (
-            region.context,
-            self.dfa.accept(StateId::new(state)).is_some(),
-        ) {
-            (
-                Context::Fixed {
-                    optional: false, ..
-                },
-                true,
-            ) => quote!(, 0),
-            (Context::Fixed { optional: true, .. }, true) => quote!(, None),
-            (Context::General, true) => quote!(, None),
-            (Context::Empty, _) => quote!(),
-            (
-                Context::Fixed {
-                    optional: false, ..
-                },
-                false,
-            ) => quote!(, (#saved).expect("the saved rule is live").1),
-            (Context::Fixed { optional: true, .. }, false) => {
-                quote!(, (#saved).map(|(_, end)| end))
-            }
-            (Context::General, false) => quote!(, #saved),
-        };
-        let entry = (region.cyclic && region.entries.len() != 1).then(|| {
-            let ordinal = self.headers[id]
-                .binary_search(&state)
-                .expect("the region contains its entry");
-            quote!(, #ordinal)
-        });
-        quote!(Self::#name(input, #index #context #entry))
-    }
-
-    fn state(&self, id: usize, state: usize, saved: &TokenStream) -> TokenStream {
-        let state_id = StateId::new(state);
-        let accept = self.dfa.accept(state_id).map(|rule| rule.index());
-        let failure = accept.map_or_else(
-            || saved.clone(),
-            |rule| {
-                let rule = rule_tag(rule);
-                quote!(Some((#rule, index)))
-            },
-        );
-        let transitions = self.dfa.transitions(state_id);
-        if transitions.is_empty() {
-            return quote!(return #failure;);
+fn call(plan: &Call) -> TokenStream {
+    let name = format_ident!("__runeweaver_region_{}", plan.region);
+    let index = position(plan.index);
+    let context = match plan.context {
+        Argument::Omitted => quote!(),
+        Argument::ZeroEnd => quote!(, 0),
+        Argument::EmptyEnd | Argument::EmptyMatch => quote!(, None),
+        Argument::RequiredEnd(value) => {
+            let saved = match_value(value);
+            quote!(, (#saved).expect("the saved rule is live").1)
         }
-        let self_ranges: Vec<_> = transitions
-            .iter()
-            .filter(|edge| edge.target == state_id)
-            .map(|edge| edge.label)
-            .collect();
-        let fast_loop = (!self_ranges.is_empty()).then(|| {
-            let table = (u8::MIN..=u8::MAX).map(|byte| {
-                self_ranges
-                    .iter()
-                    .any(|range| (range.low..=range.high).contains(&byte))
-            });
-            let tests = (0usize..8).step_by(2).map(|offset| {
-                let next = offset + 1;
-                quote! {
-                    if SELF_LOOP[bytes[#offset] as usize] & SELF_LOOP[bytes[#next] as usize] == 0 {
-                        index += #offset;
-                        break 'fast;
-                    }
-                }
-            });
+        Argument::OptionalEnd(value) => {
+            let saved = match_value(value);
+            quote!(, (#saved).map(|(_, end)| end))
+        }
+        Argument::Match(value) => {
+            let saved = match_value(value);
+            quote!(, #saved)
+        }
+    };
+    let entry = plan.entry.map(|ordinal| quote!(, #ordinal));
+    quote!(Self::#name(input, #index #context #entry))
+}
+
+fn block(plan: &Block) -> TokenStream {
+    let (self_loop, failure, dispatch) = match plan {
+        Block::Return(value) => {
+            let value = match_value(*value);
+            return quote!(return #value;);
+        }
+        Block::Scan {
+            self_loop,
+            failure,
+            dispatch,
+        } => (self_loop, failure, dispatch),
+    };
+    let failure = match_value(*failure);
+    let fast_loop = self_loop.as_ref().map(|plan| {
+        let table = plan.values.iter();
+        let chunk_size = proc_macro2::Literal::usize_unsuffixed(plan.chunk_size);
+        let tests = plan.probes.iter().map(|(offset, next)| {
             quote! {
-                const SELF_LOOP: &[u8; 256] = &[#(#table as u8),*];
-                'fast: while index + 8 <= input.len() {
-                    let bytes: &[u8; 8] = input[index..index + 8]
-                        .try_into().expect("an eight-byte slice has eight bytes");
-                    #(#tests)*
-                    index += 8;
-                }
-                while index < input.len() && SELF_LOOP[input[index] as usize] != 0 {
-                    index += 1;
+                if SELF_LOOP[bytes[#offset] as usize] & SELF_LOOP[bytes[#next] as usize] == 0 {
+                    index += #offset;
+                    break 'fast;
                 }
             }
         });
-        let mut targets: BTreeMap<usize, Vec<ByteRange>> = BTreeMap::new();
-        for edge in transitions.iter().filter(|edge| edge.target != state_id) {
-            targets
-                .entry(edge.target.index())
-                .or_default()
-                .push(edge.label);
+        quote! {
+            const SELF_LOOP: &[u8; 256] = &[#(#table as u8),*];
+            'fast: while index + #chunk_size <= input.len() {
+                let bytes: &[u8; #chunk_size] = input[index..index + #chunk_size]
+                    .try_into().expect("an eight-byte slice has eight bytes");
+                #(#tests)*
+                index += #chunk_size;
+            }
+            while index < input.len() && SELF_LOOP[input[index] as usize] != 0 {
+                index += 1;
+            }
         }
-        let fork = if targets.len() > 2 || targets.values().any(|ranges| ranges.len() > 2) {
-            let dead = targets.len();
-            let width = super::emitter::local_width(dead);
-            let table = (u8::MIN..=u8::MAX).map(|byte| {
-                let ordinal = targets
-                    .values()
-                    .position(|ranges| {
-                        ranges
-                            .iter()
-                            .any(|range| (range.low..=range.high).contains(&byte))
-                    })
-                    .unwrap_or(dead);
-                quote!(#ordinal as #width)
-            });
-            let branches = targets.keys().enumerate().map(|(ordinal, &target)| {
+    });
+    let (read, fork) = match dispatch {
+        Dispatch::Fail => (quote!(), quote!(return #failure;)),
+        Dispatch::Table {
+            width: cell,
+            values,
+            branches,
+        } => {
+            let width = width(*cell);
+            let table = values.iter().map(|ordinal| quote!(#ordinal as #width));
+            let branches = branches.iter().enumerate().map(|(ordinal, plan)| {
                 let ordinal = proc_macro2::Literal::usize_unsuffixed(ordinal);
-                let code = self.transfer(id, target, &failure, accept.is_some());
+                let code = transfer(plan);
                 quote!(#ordinal => { #code },)
             });
-            quote! {
-                const FORK: &[#width; 256] = &[#(#table),*];
-                match FORK[byte as usize] {
-                    #(#branches)*
-                    _ => return #failure,
-                }
-            }
-        } else {
-            let branches = targets.iter().map(|(&target, ranges)| {
+            (
+                quote!(let byte = input[index];),
+                quote! {
+                    const FORK: &[#width; 256] = &[#(#table),*];
+                    match FORK[byte as usize] {
+                        #(#branches)*
+                        _ => return #failure,
+                    }
+                },
+            )
+        }
+        Dispatch::Ranges(branches) => {
+            let read = quote!(let byte = input[index];);
+            let branches = branches.iter().map(|(ranges, plan)| {
                 let tests = ranges.iter().map(|range| {
                     let low = range.low;
                     let high = range.high;
                     quote!((#low..=#high).contains(&byte))
                 });
-                let code = self.transfer(id, target, &failure, accept.is_some());
+                let code = transfer(plan);
                 quote! { if false #(|| #tests)* { #code } }
             });
-            quote! { #(#branches)* return #failure; }
-        };
-        let read = (!targets.is_empty()).then(|| {
-            quote! {
-                let byte = input[index];
-            }
-        });
-        quote! {
-            #fast_loop
-            if index == input.len() { return #failure; }
-            #read
-            #fork
+            (quote!(#read), quote! { #(#branches)* return #failure; })
         }
+    };
+    quote! {
+        #fast_loop
+        if index == input.len() { return #failure; }
+        #read
+        #fork
     }
+}
 
-    fn transfer(
-        &self,
-        id: usize,
-        target: usize,
-        saved: &TokenStream,
-        accepts: bool,
-    ) -> TokenStream {
-        let target_id = StateId::new(target);
-        let region = &self.regions.regions[id];
-        if self.dfa.transitions(target_id).is_empty() {
-            return self.dfa.accept(target_id).map_or_else(
-                || quote!(return #saved;),
-                |rule| {
-                    let rule = rule_tag(rule.index());
-                    quote!(return Some((#rule, index + 1));)
-                },
-            );
+fn transfer(plan: &Transfer) -> TokenStream {
+    match plan {
+        Transfer::Return(value) => {
+            let value = match_value(*value);
+            quote!(return #value;)
         }
-        if self.regions.owner[target] != id {
-            let call = self.call(target, saved, &quote!(index + 1));
-            return quote!(return #call;);
+        Transfer::Call(plan) => {
+            let call = call(plan);
+            quote!(return #call;)
         }
-        if region.cyclic && self.headers[id].binary_search(&target).is_ok() {
-            let ordinal = self.headers[id]
-                .binary_search(&target)
-                .expect("the target is a loop header");
-            let inherited = match region.context {
-                Context::Empty => quote!(None::<(::core::num::NonZeroUsize, usize)>),
-                Context::Fixed {
-                    rule,
-                    optional: false,
-                } => {
-                    let rule = rule_tag(rule);
-                    quote!(Some((#rule, saved_end)))
-                }
-                Context::Fixed {
-                    rule,
-                    optional: true,
-                } => {
-                    let rule = rule_tag(rule);
-                    quote!(saved_end.map(|end| (#rule, end)))
-                }
-                Context::General => quote!(latest),
-            };
-            let update = if (accepts || saved.to_string() != inherited.to_string())
-                && self.dfa.accept(target_id).is_none()
-            {
-                match region.context {
+        Transfer::Continue { update, header } => {
+            let update = update.map(|(context, value)| {
+                let saved = match_value(value);
+                match context {
                     Context::Empty => quote!(),
                     Context::Fixed {
                         optional: false, ..
@@ -346,28 +206,64 @@ impl Selector<'_> {
                     }
                     Context::General => quote!(latest = #saved;),
                 }
-            } else {
-                quote!()
-            };
-            let select = (self.headers[id].len() > 1).then(|| quote!(state = #ordinal;));
-            quote! {
-                #update
-                index += 1;
-                #select
-                continue 'region;
-            }
-        } else {
-            let needs_saved = self.dfa.accept(target_id).is_none()
-                && self.regions.incoming[target].iter().any(Option::is_some);
-            let bind = needs_saved.then(|| quote!(let saved = #saved;));
-            let context = if needs_saved {
-                quote!(saved)
-            } else {
-                quote!(None::<(::core::num::NonZeroUsize, usize)>)
-            };
-            let code = self.state(id, target, &context);
+            });
+            let select = header.map(|ordinal| quote!(state = #ordinal;));
+            quote! { #update index += 1; #select continue 'region; }
+        }
+        Transfer::Inline { bind, body } => {
+            let bind = bind.map(|value| {
+                let saved = match_value(value);
+                quote!(let saved = #saved;)
+            });
+            let code = block(body);
             quote! { #bind index += 1; #code }
         }
+    }
+}
+
+fn match_value(value: MatchValue) -> TokenStream {
+    match value {
+        MatchValue::Empty | MatchValue::Context(Context::Empty) => {
+            quote!(None::<(::core::num::NonZeroUsize, usize)>)
+        }
+        MatchValue::Accepted { rule, end } => {
+            let rule = rule_tag(rule);
+            let end = position(end);
+            quote!(Some((#rule, #end)))
+        }
+        MatchValue::Context(Context::Fixed {
+            rule,
+            optional: false,
+        }) => {
+            let rule = rule_tag(rule);
+            quote!(Some((#rule, saved_end)))
+        }
+        MatchValue::Context(Context::Fixed {
+            rule,
+            optional: true,
+        }) => {
+            let rule = rule_tag(rule);
+            quote!(saved_end.map(|end| (#rule, end)))
+        }
+        MatchValue::Context(Context::General) => quote!(latest),
+        MatchValue::Local => quote!(saved),
+    }
+}
+
+fn position(value: Position) -> TokenStream {
+    match value {
+        Position::Zero => quote!(0),
+        Position::Current => quote!(index),
+        Position::Next => quote!(index + 1),
+    }
+}
+
+fn width(value: Width) -> TokenStream {
+    match value {
+        Width::U8 => quote!(u8),
+        Width::U16 => quote!(u16),
+        Width::U32 => quote!(u32),
+        Width::Usize => quote!(usize),
     }
 }
 
