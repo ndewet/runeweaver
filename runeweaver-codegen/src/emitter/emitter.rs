@@ -142,6 +142,23 @@ pub(crate) fn emit(
             }
         })
         .collect();
+    let fused_skips = lexer
+        .rules()
+        .iter()
+        .enumerate()
+        .filter(|(_, rule)| {
+            rule.action().is_skip() && matches!(rule.transition(), ResolvedTransition::Stay)
+        })
+        .map(|(index, _)| {
+            quote! {
+                #index if length != 0 => {
+                    offset = end;
+                    if offset == input.len() {
+                        return Some(Ok((None, offset, #runtime::Transition::Stay)));
+                    }
+                }
+            }
+        });
     let actions: Vec<_> = lexer
         .rules()
         .iter()
@@ -212,6 +229,36 @@ pub(crate) fn emit(
                 match state {
                     #(#selectors)*
                     _ => return latest,
+                }
+            }
+        }
+
+        fn __runeweaver_scan_one(
+            input: &str,
+            start_condition: usize,
+        ) -> Option<#runtime::RuleScan<Self>> {
+            let mut offset = 0;
+            loop {
+                let Some((rule, length)) = Self::__runeweaver_select(
+                    &input.as_bytes()[offset..],
+                    start_condition,
+                ) else {
+                    return (offset != 0).then_some(Ok((
+                        None,
+                        offset,
+                        #runtime::Transition::Stay,
+                    )));
+                };
+                let end = offset + length;
+                match rule {
+                    #(#fused_skips)*
+                    _ => {
+                        return Some(
+                            Self::__runeweaver_action(rule, &input[offset..end])
+                                .map(|(token, transition)| (token, end, transition))
+                                .map_err(|error| (error, end)),
+                        );
+                    }
                 }
             }
         }

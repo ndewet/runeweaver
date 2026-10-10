@@ -195,12 +195,7 @@ fn derive_lexer_inner(input: DeriveInput) -> Result<proc_macro2::TokenStream> {
             }
 
             fn scan_one(input: &str, mode: usize) -> Option<#runtime::RuleScan<Self>> {
-                let (rule, length) = Self::__runeweaver_select(input.as_bytes(), mode)?;
-                Some(
-                    Self::__runeweaver_action(rule, &input[..length])
-                        .map(|(token, transition)| (token, length, transition))
-                        .map_err(|error| (error, length)),
-                )
+                Self::__runeweaver_scan_one(input, mode)
             }
 
             fn run_action(

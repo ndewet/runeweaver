@@ -57,6 +57,22 @@ enum WithTrivia {
     Identifier,
 }
 
+#[test]
+fn generated_single_token_scan_fuses_stay_mode_trivia() {
+    assert_eq!(
+        WithTrivia::scan_one(" \tword tail", 0),
+        Some(Ok((
+            Some(WithTrivia::Identifier),
+            6,
+            runeweaver::Transition::Stay,
+        )))
+    );
+    assert_eq!(
+        WithTrivia::scan_one(" \t", 0),
+        Some(Ok((None, 2, runeweaver::Transition::Stay)))
+    );
+}
+
 #[derive(Debug, PartialEq, Lexer)]
 #[lexer(mode = Comment)]
 #[lexer(skip = r"[ \t\r\n]+")]
