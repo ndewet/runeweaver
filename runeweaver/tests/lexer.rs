@@ -1020,3 +1020,329 @@ fn scanner_returns_lookahead_before_the_original_source() {
     );
     assert_eq!(&bytes, b"bbbx");
 }
+
+#[derive(Debug, PartialEq, Lexer)]
+enum Continuation {
+    #[token("a+")]
+    Short,
+    #[token("a+bcd")]
+    Long,
+    #[token("(xy)+")]
+    Cycle,
+    #[token("\u{e9}+")]
+    Unicode,
+}
+
+fn continuation(input: &str) -> Option<(Continuation, usize)> {
+    let (token, length, _) = Continuation::scan_one(input, 0)?.ok()?;
+    Some((token?, length))
+}
+
+#[test]
+fn continuations_preserve_matches_after_loop_exits_and_failed_longer_rules() {
+    for length in 1..=25 {
+        let prefix = "a".repeat(length);
+        assert_eq!(
+            continuation(&format!("{prefix}!")),
+            Some((Continuation::Short, length))
+        );
+        assert_eq!(
+            continuation(&format!("{prefix}bc!")),
+            Some((Continuation::Short, length))
+        );
+        assert_eq!(
+            continuation(&format!("{prefix}bcd!")),
+            Some((Continuation::Long, length + 3))
+        );
+    }
+    assert_eq!(continuation("!"), None);
+    assert_eq!(
+        continuation("\u{e9}\u{e9}!"),
+        Some((Continuation::Unicode, 4))
+    );
+}
+
+#[test]
+fn single_token_continuations_use_the_start_condition_and_rule_priority() {
+    assert_eq!(
+        Priority::scan_one("a", 0),
+        Some(Ok((Some(Priority::First), 1, runeweaver::Transition::Stay)))
+    );
+    assert_eq!(
+        ModeTokens::scan_one("text", 0),
+        Some(Ok((
+            Some(ModeTokens::Identifier),
+            4,
+            runeweaver::Transition::Stay
+        )))
+    );
+    assert_eq!(
+        ModeTokens::scan_one("text", 1),
+        Some(Ok((
+            Some(ModeTokens::StringText),
+            4,
+            runeweaver::Transition::Stay
+        )))
+    );
+    assert_eq!(ModeTokens::scan_one("text", 2), None);
+}
+
+#[test]
+fn long_self_loops_and_state_cycles_complete_on_a_small_stack() {
+    std::thread::Builder::new()
+        .stack_size(64 * 1024)
+        .spawn(|| {
+            let input = "a".repeat(1024 * 1024);
+            assert_eq!(
+                continuation(&input),
+                Some((Continuation::Short, input.len()))
+            );
+            let input = "xy".repeat(128 * 1024);
+            assert_eq!(
+                continuation(&input),
+                Some((Continuation::Cycle, input.len()))
+            );
+        })
+        .expect("the test thread starts")
+        .join()
+        .expect("the test thread completes");
+}
+
+#[derive(Debug, PartialEq, Lexer)]
+enum RegionToken {
+    #[token("a")]
+    A,
+    #[token("b")]
+    B,
+    #[token("[abx]cd")]
+    General,
+    #[token("z")]
+    Z,
+    #[token("[zy]ef")]
+    Fixed,
+    #[token("q")]
+    Q,
+    #[token("q(rq)*s")]
+    Cycle,
+    #[token("p")]
+    P,
+    #[token("[pt](uv)*w")]
+    OptionalCycle,
+    #[token("(mn)*m")]
+    RepeatedAccept,
+    #[token(r#""([^"\\]|\\.)*""#)]
+    Quoted,
+}
+
+fn interpreted_region(input: &str) -> Option<(RegionToken, usize)> {
+    interpreted_token::<RegionToken>(input)
+}
+
+fn interpreted_token<T: Lexer>(input: &str) -> Option<(T, usize)> {
+    let mut state = T::start_state(0)?;
+    let mut latest = T::accepting_rule(state).map(|rule| (rule, 0));
+    for (offset, &byte) in input.as_bytes().iter().enumerate() {
+        let Some(next) = T::next_state(state, byte) else {
+            break;
+        };
+        state = next;
+        if let Some(rule) = T::accepting_rule(state) {
+            latest = Some((rule, offset + 1));
+        }
+    }
+    let (rule, end) = latest?;
+    let (token, _) = T::run_action(rule, &input[..end]).ok()?;
+    Some((token?, end))
+}
+
+#[derive(Debug, PartialEq, Lexer)]
+enum MembershipToken {
+    #[token("private")]
+    Private,
+    #[token("primitive")]
+    Primitive,
+    #[token("[a-zA-Z_$][a-zA-Z0-9_$]*")]
+    Identifier,
+}
+
+#[derive(Debug, PartialEq, Lexer)]
+enum CycleAcceptToken {
+    #[token("(ab|cdb)*a")]
+    First,
+    #[token("(ab|cdb)*cd")]
+    Second,
+}
+
+#[derive(Debug, PartialEq, Lexer)]
+#[lexer(skip = "[\u{2003}\u{1f642}]+")]
+enum BoundaryToken {
+    #[token("[a-z\u{e9}\u{1f600}]+", with = boundary_text)]
+    Text(String),
+}
+
+fn boundary_text(text: &str) -> Result<String, Infallible> {
+    Ok(text.to_owned())
+}
+
+#[test]
+fn token_actions_receive_complete_utf8_text_after_unicode_skips() {
+    for prefix in ["", "\u{2003}", "\u{1f642}", "\u{2003}\u{1f642}\u{2003}"] {
+        for text in ["a", "\u{e9}", "\u{1f600}", "a\u{e9}\u{1f600}"] {
+            let input = format!("{prefix}{text}!");
+            assert_eq!(
+                BoundaryToken::scan_one(&input, 0),
+                Some(Ok((
+                    Some(BoundaryToken::Text(text.to_owned())),
+                    prefix.len() + text.len(),
+                    runeweaver::Transition::Stay
+                )))
+            );
+        }
+        if !prefix.is_empty() {
+            assert_eq!(
+                BoundaryToken::scan_one(prefix, 0),
+                Some(Ok((None, prefix.len(), runeweaver::Transition::Stay)))
+            );
+        }
+    }
+}
+
+#[test]
+fn nested_cycle_paths_preserve_different_saved_rules_and_end_offsets() {
+    let alphabet = b"abcd";
+    for length in 0..=6 {
+        for mut number in 0..alphabet.len().pow(length) {
+            let mut bytes = vec![b' '; length as usize];
+            for byte in &mut bytes {
+                *byte = alphabet[number % alphabet.len()];
+                number /= alphabet.len();
+            }
+            let input = std::str::from_utf8(&bytes).expect("the test alphabet is ASCII");
+            let selected = CycleAcceptToken::scan_one(input, 0)
+                .and_then(Result::ok)
+                .and_then(|(token, end, _)| token.map(|token| (token, end)));
+            assert_eq!(
+                selected,
+                interpreted_token::<CycleAcceptToken>(input),
+                "{input}"
+            );
+        }
+    }
+}
+
+#[test]
+fn local_membership_tables_preserve_all_byte_ranges_and_keyword_fallbacks() {
+    for prefix in ["", "p", "pr", "priv", "private", "primitive"] {
+        for byte in 0..=127u8 {
+            let input = format!("{prefix}{}!", char::from(byte));
+            let selected = MembershipToken::scan_one(&input, 0)
+                .and_then(Result::ok)
+                .and_then(|(token, end, _)| token.map(|token| (token, end)));
+            assert_eq!(
+                selected,
+                interpreted_token::<MembershipToken>(&input),
+                "{input:?}"
+            );
+        }
+    }
+    for input in [
+        "private",
+        "primitive",
+        "priv",
+        "private_name",
+        "primitive2",
+        "private\u{e9}",
+        "\u{e9}",
+    ] {
+        let selected = MembershipToken::scan_one(input, 0)
+            .and_then(Result::ok)
+            .and_then(|(token, end, _)| token.map(|token| (token, end)));
+        assert_eq!(
+            selected,
+            interpreted_token::<MembershipToken>(input),
+            "{input}"
+        );
+    }
+}
+
+fn selected_region(input: &str) -> Option<(RegionToken, usize)> {
+    let (token, end, _) = RegionToken::scan_one(input, 0)?.ok()?;
+    Some((token?, end))
+}
+
+#[test]
+fn regions_agree_with_interpretation_on_all_short_inputs() {
+    let alphabet = b"abxcdzyef!";
+    for length in 0..=4 {
+        for mut number in 0..alphabet.len().pow(length) {
+            let mut bytes = vec![b' '; length as usize];
+            for byte in &mut bytes {
+                *byte = alphabet[number % alphabet.len()];
+                number /= alphabet.len();
+            }
+            let input = std::str::from_utf8(&bytes).expect("the test alphabet is ASCII");
+            assert_eq!(selected_region(input), interpreted_region(input), "{input}");
+        }
+    }
+}
+
+#[test]
+fn regions_preserve_saved_matches_across_cycles_and_unicode() {
+    for input in [
+        "q",
+        "qr",
+        "qrq",
+        "qrqrq!",
+        "qrqrqs!",
+        "puvu!",
+        "tuvu!",
+        "puvuvw!",
+        "tuvuvw!",
+        "\"\u{e9}\u{1f600}\"!",
+        "\"\u{e9}\u{1f600}!",
+        "\"a\\\"b\"!",
+        "mnmnm!",
+        "mnmn!",
+    ] {
+        assert_eq!(selected_region(input), interpreted_region(input), "{input}");
+    }
+}
+
+#[test]
+fn read_loops_preserve_each_exit_and_partial_chunk() {
+    for length in 0..=40 {
+        let prefix = "a".repeat(length);
+        for suffix in ["\"!", "\\nrest\"!", "\u{e9}rest\"!", "", "\\"] {
+            let input = format!("\"{prefix}{suffix}");
+            assert_eq!(
+                selected_region(&input),
+                interpreted_region(&input),
+                "{input}"
+            );
+        }
+        let input = format!("{prefix}!");
+        assert_eq!(
+            continuation(&input),
+            (length != 0).then_some((Continuation::Short, length))
+        );
+    }
+}
+
+#[test]
+fn region_cycles_have_bounded_stack_use_in_debug_and_release() {
+    std::thread::Builder::new()
+        .stack_size(64 * 1024)
+        .spawn(|| {
+            for input in [
+                format!("q{}!", "rq".repeat(128 * 1024)),
+                format!("p{}!", "uv".repeat(128 * 1024)),
+                format!("\"{}\"", "\u{e9}\u{1f600}\\n".repeat(64 * 1024)),
+                format!("{}!", "mn".repeat(128 * 1024)),
+            ] {
+                assert_eq!(selected_region(&input), interpreted_region(&input));
+            }
+        })
+        .expect("the test thread starts")
+        .join()
+        .expect("the test thread completes");
+}

@@ -49,99 +49,7 @@ pub(crate) fn emit(
             })
         })
         .collect();
-    let selectors: Vec<_> = (0..dfa.state_count())
-        .map(|index| {
-            let state = crate::automata::StateId::new(index);
-            let transitions = dfa.transitions(state);
-            let accept = dfa.accept(state).map(|rule| {
-                let rule = rule.index();
-                quote! { latest = Some((#rule, index)); }
-            });
-            let self_transitions: Vec<_> = transitions
-                .iter()
-                .filter(|transition| transition.target == state)
-                .collect();
-            let fast_loop = (!self_transitions.is_empty()).then(|| {
-                let table = (u8::MIN..=u8::MAX).map(|byte| {
-                    self_transitions.iter().any(|transition| {
-                        (transition.label.low..=transition.label.high).contains(&byte)
-                    })
-                });
-                let tests = (0usize..8).map(|offset| {
-                    quote! {
-                        if SELF_LOOP[bytes[#offset] as usize] == 0 {
-                            index += #offset;
-                            break 'fast;
-                        }
-                    }
-                });
-                quote! {
-                    const SELF_LOOP: &[u8; 256] = &[#(#table as u8),*];
-                    'fast: while index + 8 <= input.len() {
-                        let bytes: &[u8; 8] = input[index..index + 8]
-                            .try_into()
-                            .expect("an eight-byte slice has eight bytes");
-                        #(#tests)*
-                        index += 8;
-                    }
-                    while index < input.len() && SELF_LOOP[input[index] as usize] != 0 {
-                        index += 1;
-                    }
-                    #accept
-                }
-            });
-            let other_transitions: Vec<_> = transitions
-                .iter()
-                .filter(|transition| transition.target != state)
-                .collect();
-            let fork = if other_transitions.len() > 2 {
-                let dead = dfa.state_count();
-                let table = (u8::MIN..=u8::MAX).map(|byte| {
-                    other_transitions
-                        .iter()
-                        .find(|transition| {
-                            (transition.label.low..=transition.label.high).contains(&byte)
-                        })
-                        .map_or(dead, |transition| transition.target.index())
-                });
-                quote! {
-                    const FORK: &[usize; 256] = &[#(#table),*];
-                    let next = FORK[byte as usize];
-                    if next != #dead {
-                        state = next;
-                        index += 1;
-                        continue 'scan;
-                    }
-                }
-            } else {
-                let branches = other_transitions.iter().map(|transition| {
-                    let low = transition.label.low;
-                    let high = transition.label.high;
-                    let target = transition.target.index();
-                    quote! {
-                        if (#low..=#high).contains(&byte) {
-                            state = #target;
-                            index += 1;
-                            continue 'scan;
-                        }
-                    }
-                });
-                quote! { #(#branches)* }
-            };
-            quote! {
-                #index => {
-                    #accept
-                    #fast_loop
-                    if index == input.len() {
-                        return latest;
-                    }
-                    let byte = input[index];
-                    #fork
-                    return latest;
-                }
-            }
-        })
-        .collect();
+    let selector = super::selector::emit(dfa);
     let fused_skips = lexer
         .rules()
         .iter()
@@ -196,6 +104,8 @@ pub(crate) fn emit(
             quote!(#index => #name,)
         });
 
+    // The UTF-8 DFA accepts complete codepoints, so selected lengths end at character boundaries.
+    // Each skipped prefix has the same guarantee; offset + length never exceeds input.len().
     quote! {
         fn __runeweaver_start(start_condition: usize) -> Option<usize> {
             match start_condition {
@@ -218,20 +128,7 @@ pub(crate) fn emit(
             }
         }
 
-        fn __runeweaver_select(
-            input: &[u8],
-            start_condition: usize,
-        ) -> Option<(usize, usize)> {
-            let mut state = Self::__runeweaver_start(start_condition)?;
-            let mut index = 0;
-            let mut latest = None;
-            'scan: loop {
-                match state {
-                    #(#selectors)*
-                    _ => return latest,
-                }
-            }
-        }
+        #selector
 
         fn __runeweaver_scan_one(
             input: &str,
@@ -249,12 +146,14 @@ pub(crate) fn emit(
                         #runtime::Transition::Stay,
                     )));
                 };
+                let rule = rule.get() - 1;
                 let end = offset + length;
                 match rule {
                     #(#fused_skips)*
                     _ => {
+                        let text = unsafe { input.get_unchecked(offset..end) };
                         return Some(
-                            Self::__runeweaver_action(rule, &input[offset..end])
+                            Self::__runeweaver_action(rule, text)
                                 .map(|(token, transition)| (token, end, transition))
                                 .map_err(|error| (error, end)),
                         );
@@ -279,6 +178,18 @@ pub(crate) fn emit(
     }
 }
 
+pub(super) fn local_width(dead: usize) -> TokenStream {
+    if u8::try_from(dead).is_ok() {
+        quote!(u8)
+    } else if u16::try_from(dead).is_ok() {
+        quote!(u16)
+    } else if u32::try_from(dead).is_ok() {
+        quote!(u32)
+    } else {
+        quote!(usize)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -297,6 +208,74 @@ mod tests {
             )],
             vec![StartCondition::new("INITIAL")],
         )
+    }
+
+    #[test]
+    fn local_width_includes_the_dead_value() {
+        for (dead, expected) in [
+            (0, "u8"),
+            (255, "u8"),
+            (256, "u16"),
+            (65535, "u16"),
+            (65536, "u32"),
+            (u32::MAX as usize, "u32"),
+        ] {
+            assert_eq!(local_width(dead).to_string(), expected);
+        }
+        #[cfg(target_pointer_width = "64")]
+        assert_eq!(local_width(u32::MAX as usize + 1).to_string(), "usize");
+    }
+
+    #[test]
+    fn direct_transitions_inline_final_accepts() {
+        let mut builder: Builder<ByteRange, RuleId> = Builder::new();
+        let start = builder.add_state();
+        let target = builder.add_state();
+        builder.add_transition(start, ByteRange::new(b'a', b'z'), target);
+        builder.set_accept(target, RuleId::new(0));
+        let dfa = builder.build(&[start]).expect("the test DFA is valid");
+        let emitted = emit(&dfa, &lexer(quote!(Rule::Token(7))), &quote!(::runeweaver)).to_string();
+        assert!(emitted.contains("return Some ((:: core :: num :: NonZeroUsize :: new (1usize)"));
+        assert!(!emitted.contains("latest = Some"));
+        assert!(!emitted.contains("fn __runeweaver_state_"));
+    }
+
+    #[test]
+    fn local_forks_select_all_targets_and_return_the_saved_match_on_failure() {
+        let mut builder: Builder<ByteRange, RuleId> = Builder::new();
+        let start = builder.add_state();
+        for byte in b'a'..=b'c' {
+            let target = builder.add_state();
+            builder.add_transition(start, ByteRange::new(byte, byte), target);
+            builder.set_accept(target, RuleId::new(usize::from(byte - b'a')));
+        }
+        let dfa = builder.build(&[start]).expect("the test DFA is valid");
+        let emitted = emit(&dfa, &lexer(quote!(Rule::Token(7))), &quote!(::runeweaver)).to_string();
+        assert!(emitted.contains("const FORK : & [u8 ; 256]"));
+        for ordinal in 0..3 {
+            assert!(emitted.contains(&format!(
+                "{ordinal} => {{ return Some ((:: core :: num :: NonZeroUsize :: new ({}usize)",
+                ordinal + 1
+            )));
+        }
+        assert!(emitted.contains("3usize as u8"));
+        assert!(
+            emitted.contains("_ => return None :: < (:: core :: num :: NonZeroUsize , usize) >")
+        );
+        assert!(!emitted.contains("let next"));
+    }
+
+    #[test]
+    fn start_conditions_call_their_regions() {
+        let mut builder: Builder<ByteRange, RuleId> = Builder::new();
+        let first = builder.add_state();
+        let second = builder.add_state();
+        let dfa = builder
+            .build(&[second, first])
+            .expect("the test DFA is valid");
+        let emitted = emit(&dfa, &lexer(quote!(Rule::Token(7))), &quote!(::runeweaver)).to_string();
+        assert!(emitted.contains("0usize => Self :: __runeweaver_region_1 (input , 0)"));
+        assert!(emitted.contains("1usize => Self :: __runeweaver_region_0 (input , 0)"));
     }
 
     #[test]
