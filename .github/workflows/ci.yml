@@ -52,7 +52,7 @@ jobs:
         run: node --test .github/scripts/check_benchmarks.test.mjs
 
   benchmark:
-    if: github.event_name == 'pull_request'
+    if: github.event_name == 'pull_request' && !contains(github.event.pull_request.labels.*.name, 'skip-benchmark')
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
