@@ -2,7 +2,7 @@ use crate::support::generation::Input;
 use quote::quote;
 use runeweaver_codegen::{RuleSpec, Transition};
 use syn::parse::{Parse, ParseStream};
-use syn::{Data, DeriveInput, Expr, Fields, LitInt, LitStr, Type};
+use syn::{Data, DeriveInput, Expr, Fields, LitStr, Type};
 
 struct Rule {
     modes: Vec<String>,
@@ -51,16 +51,6 @@ impl Parse for LexerAttribute {
             return Ok(Self {
                 name: name.to_string(),
                 mode: Some(mode.to_string()),
-                pattern: None,
-                rule: Rule::stay(),
-            });
-        }
-
-        if name == "max_token_bytes" {
-            let _: LitInt = input.parse()?;
-            return Ok(Self {
-                name: name.to_string(),
-                mode: None,
                 pattern: None,
                 rule: Rule::stay(),
             });
@@ -145,7 +135,6 @@ pub fn parse(source: &str) -> Input {
                 RuleSpec::skip(attribute.pattern.expect("a skip has a pattern").value()),
                 attribute.rule,
             )),
-            "max_token_bytes" => {}
             _ => panic!("unsupported benchmark lexer attribute"),
         }
     }

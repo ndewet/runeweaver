@@ -4,9 +4,9 @@ use std::{fmt, ops::Range};
 
 /// A half-open range of UTF-8 byte offsets.
 ///
-/// An offset is absolute, and it starts at zero when the scanner starts.
-/// An offset uses `u64`, because a stream can be longer than `usize`.
-/// An offset carries no source identity. Use the scanner that made the span.
+/// An offset is absolute, and it starts at zero at the beginning of a scan.
+/// An offset carries no input identity. Use it with the string that produced
+/// the span.
 ///
 /// # Examples
 ///
@@ -135,7 +135,7 @@ impl Span {
     ///
     /// Returns `None` if the range is outside `input`, if the range does not
     /// start and end at a character boundary, or if an offset does not fit in
-    /// `usize`. Give the same input that the scanner read.
+    /// `usize`. Give the same input that was scanned.
     ///
     /// # Examples
     ///

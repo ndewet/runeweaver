@@ -16,13 +16,16 @@ enum Token {
 }
 
 fn main() {
-    assert_eq!(Token::scan("let"), Some((Token::Let, 3)));
+    let first = Token::scan("letter")
+        .next()
+        .expect("one token")
+        .expect("valid input");
     assert_eq!(
-        Token::scan("letter"),
-        Some((Token::Identifier, 6)),
-        "the longer identifier rule wins",
+        first.token,
+        Token::Identifier,
+        "the longer identifier rule wins"
     );
 
-    let tokens: Vec<_> = Token::scanner("let answer = 42").collect();
+    let tokens: Vec<_> = Token::scan("let answer = 42").collect();
     println!("{tokens:#?}");
 }

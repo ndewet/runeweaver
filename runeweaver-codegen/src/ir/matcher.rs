@@ -3,15 +3,12 @@
 use super::builder::Builder;
 use super::rule::RuleEffect;
 use super::selector::Selector;
-use crate::automata::{StateId, dfa::Dfa, encoding::ByteRange};
+use crate::automata::{dfa::Dfa, encoding::ByteRange};
 use crate::lexer::{ResolvedTransition, RuleId};
 
 #[derive(Debug)]
-/// Holds generic DFA operations and the specialized selector plan.
+/// Holds the specialized selector plan and fused skip rules.
 pub(crate) struct Matcher {
-    pub starts: Vec<usize>,
-    pub transitions: Vec<(usize, Vec<(ByteRange, usize)>)>,
-    pub accepts: Vec<(usize, usize)>,
     pub selector: Selector,
     pub fused_skips: Vec<usize>,
 }
@@ -30,31 +27,6 @@ impl Matcher {
         rules: impl IntoIterator<Item = RuleEffect>,
     ) -> Self {
         Self {
-            starts: dfa
-                .start_states()
-                .iter()
-                .map(|state| state.index())
-                .collect(),
-            transitions: (0..dfa.state_count())
-                .filter_map(|index| {
-                    let edges = dfa.transitions(StateId::new(index));
-                    (!edges.is_empty()).then(|| {
-                        (
-                            index,
-                            edges
-                                .iter()
-                                .map(|edge| (edge.label, edge.target.index()))
-                                .collect(),
-                        )
-                    })
-                })
-                .collect(),
-            accepts: (0..dfa.state_count())
-                .filter_map(|index| {
-                    dfa.accept(StateId::new(index))
-                        .map(|rule| (index, rule.index()))
-                })
-                .collect(),
             selector: Builder::new(dfa).build(),
             fused_skips: rules
                 .into_iter()

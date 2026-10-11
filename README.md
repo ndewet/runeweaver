@@ -3,15 +3,15 @@
 [![CI](https://github.com/ndewet/runeweaver/actions/workflows/ci.yml/badge.svg)](https://github.com/ndewet/runeweaver/actions/workflows/ci.yml)
 
 `runeweaver` is a compile-time lexer generator for Rust. Describe tokens with regular
-expressions on an enum, derive `Lexer`, and receive a typed scanner backed by a
-generated deterministic finite automaton.
+expressions on an enum, derive `Lexer`, and scan strings with a generated
+deterministic finite automaton.
 
 - Longest-match token selection with declaration-order tie breaking
 - UTF-8 input, Unicode literals and character classes, and byte-accurate spans
-- In-memory and streaming input through one scanner API
+- A borrowed `&str` scanning API
 - Owned token payloads through `FromStr` or custom converters
 - Lexical modes for strings, interpolation, and nested comments
-- Recoverable errors for unrecognized input, invalid UTF-8, and invalid payloads
+- Recoverable errors for unrecognized input and invalid payloads
 - No runtime regular-expression engine
 
 ## Installation
@@ -49,7 +49,7 @@ enum Token {
     Equal,
 }
 
-let tokens = Token::scanner("answer == 42")
+let tokens = Token::scan("answer == 42")
     .collect::<Result<Vec<_>, _>>()
     .expect("the input is valid");
 
@@ -78,7 +78,7 @@ with multiple fields, and borrowed payloads are rejected at compile time.
 
 ## Matching semantics
 
-Rules are anchored at the scanner's current position. The rule that consumes
+Rules are anchored at the scan's current position. The rule that consumes
 the most input wins. If several rules consume the same number of bytes, the
 rule declared first wins.
 
@@ -163,12 +163,12 @@ fn parse_color(text: &str) -> Result<u32, std::num::ParseIntError> {
 ```
 
 A failed `FromStr` or converter becomes `ScanError::InvalidPayload`. The
-scanner consumes that lexeme, reports its span, and continues with subsequent
+scan consumes that lexeme, reports its span, and continues with subsequent
 input.
 
 ## Spans and errors
 
-`Token::scanner(input)` yields `Result<Spanned<Token>, ScanError>`. A `Span` is
+`Token::scan(input)` yields `Result<Spanned<Token>, ScanError>`. A `Span` is
 a half-open range of absolute UTF-8 byte offsets:
 
 ```rust
@@ -179,60 +179,14 @@ assert_eq!(span.text("name 42"), Some("42"));
 assert_eq!(span.range(), Some(5..7));
 ```
 
-Scanning distinguishes five input failures:
+Scanning distinguishes three input failures:
 
 - `Unrecognized` for a valid UTF-8 character accepted by no rule
-- `InvalidUtf8` for malformed byte input
 - `InvalidPayload` when token conversion fails
 - `UnterminatedMode` when input ends inside a pushed lexical mode
-- `Source` when a streaming source cannot provide more input
 
-Unrecognized input, invalid UTF-8, and payload failures are recoverable: the
-scanner consumes the offending range and continues. A source failure ends the
-iterator because the scanner cannot determine whether more bytes would extend
-the current match.
-
-`Token::scan(input)` is a convenience for requesting only the first token. It
-returns the token and the total byte count consumed before it, including
-leading skipped input.
-
-## Streaming sources
-
-The scanner accepts any `Source`. Use `&str` for in-memory text, `Slice` for an
-arbitrary byte slice, and `Reader` for standard `Read` implementations:
-
-```rust,no_run
-use runeweaver::{Lexer, Reader};
-use std::fs::File;
-
-#[derive(Lexer)]
-enum Token {
-    #[token("[A-Za-z_][A-Za-z0-9_]*")]
-    Identifier,
-}
-
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let file = File::open("input.txt")?;
-
-    for item in Token::scanner_from(Reader::new(file)) {
-        let token = item?;
-        println!("{:?}", token.span);
-    }
-
-    Ok(())
-}
-```
-
-A source does not need to seek or preserve token boundaries. The scanner owns
-the lookahead needed for longest-match selection. If a parser stops early,
-`Scanner::into_source` returns the unread lookahead followed by the original
-source.
-
-Streaming bounds the amount read from the underlying source at one time, but
-the scanner retains the current candidate lexeme and its lookahead. Memory use
-therefore scales with the longest candidate token, not only with the fixed read
-chunk. Applications processing untrusted input should design token rules with
-appropriate length bounds.
+Unrecognized input and payload failures are recoverable: the scan consumes the
+offending range and continues.
 
 ## Lexical modes
 
@@ -267,8 +221,7 @@ The [`runeweaver/examples`](runeweaver/examples) directory contains runnable pro
 - automatic and custom payload conversion;
 - error reporting and recovery;
 - lexical modes and nested comments;
-- supported pattern constructs; and
-- slices, readers, and custom input sources.
+- supported pattern constructs.
 
 Run an example from the workspace root:
 
@@ -340,5 +293,5 @@ version, and `fix` bumps the patch version. Only the largest change is applied.
 Runeweaver's derive-based lexer declaration syntax was inspired by
 [Logos](https://github.com/maciejhirsz/logos). Runeweaver is an independent
 implementation with its own regex parser and automata pipeline, designed around
-streaming input, lexical modes, owned payloads, and structured error recovery.
+borrowed string input, lexical modes, owned payloads, and structured error recovery.
 Runeweaver does not incorporate Logos source code.

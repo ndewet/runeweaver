@@ -8,22 +8,12 @@
 extern crate self as runeweaver;
 
 pub use runeweaver_derive::Lexer;
-pub use source::{Reader, Remainder, Slice, Source};
-
-mod source;
 
 mod payload;
 mod span;
 
 pub use payload::PayloadResult;
 pub use span::Span;
-
-/// The maximum candidate-token length used when a lexer does not override it.
-///
-/// A scanner retains the current candidate and a small amount of lookahead to
-/// implement longest-match selection. Lexer declarations can choose another
-/// limit with `#[lexer(max_token_bytes = N)]`.
-pub const DEFAULT_MAX_TOKEN_BYTES: usize = 16 * 1024 * 1024;
 
 use std::marker::PhantomData;
 use std::str::FromStr;
@@ -109,47 +99,6 @@ impl<T> Spanned<T> {
     }
 }
 
-/// A token together with its byte range and matched text.
-///
-/// The lexeme is owned so this value has the same shape for in-memory and
-/// streaming sources. Use [`Scanner::with_lexemes`] to request this item type.
-/// The regular scanner does not allocate or retain lexemes.
-///
-/// # Examples
-///
-/// ```
-/// use runeweaver::{Lexer, Span, SpannedLexeme};
-///
-/// #[derive(Debug, PartialEq, Lexer)]
-/// enum Token {
-///     #[token("[a-z]+")]
-///     Word,
-/// }
-///
-/// let token = Token::scanner("hello")
-///     .with_lexemes()
-///     .next()
-///     .expect("the input has a token")
-///     .expect("the input is valid");
-/// assert_eq!(
-///     token,
-///     SpannedLexeme {
-///         token: Token::Word,
-///         span: Span::new(0, 5),
-///         lexeme: "hello".to_owned(),
-///     }
-/// );
-/// ```
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SpannedLexeme<T> {
-    /// The token accepted by the lexer.
-    pub token: T,
-    /// The half-open UTF-8 byte range matched by this token.
-    pub span: Span,
-    /// The matched UTF-8 text.
-    pub lexeme: String,
-}
-
 /// Holds the items that generated code names, and that callers do not.
 #[doc(hidden)]
 pub mod __private {
@@ -166,7 +115,8 @@ pub struct PayloadError {
 
 /// The result of selecting and executing one lexer rule.
 #[doc(hidden)]
-pub type RuleScan<T> = Result<(Option<T>, usize, Transition), (PayloadError, usize)>;
+pub type RuleScan<T> =
+    Result<(Option<T>, usize, usize, Transition), (PayloadError, usize, usize)>;
 
 /// A generated lexer rule's update to the start-condition stack.
 #[doc(hidden)]
@@ -232,15 +182,10 @@ where
 /// assert!(matches!(error, ScanError::Unrecognized { span } if span.len() == 1));
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ScanError<E = std::convert::Infallible> {
+pub enum ScanError {
     /// No rule accepted the character at this UTF-8 byte range.
     Unrecognized {
         /// The UTF-8 byte range of the unrecognized character.
-        span: Span,
-    },
-    /// The source contained a byte sequence that is not valid UTF-8.
-    InvalidUtf8 {
-        /// The byte range of the invalid sequence.
         span: Span,
     },
     /// A winning rule's payload conversion failed.
@@ -250,13 +195,6 @@ pub enum ScanError<E = std::convert::Infallible> {
         /// The payload conversion error's message.
         message: String,
     },
-    /// A candidate token exceeded the lexer's configured byte limit.
-    TokenTooLong {
-        /// The range of the observed over-limit prefix.
-        span: Span,
-        /// The maximum token length configured for this lexer.
-        limit: usize,
-    },
     /// Input ended while a pushed lexer mode was still active.
     UnterminatedMode {
         /// The range from the mode-opening rule through end of input.
@@ -264,20 +202,10 @@ pub enum ScanError<E = std::convert::Infallible> {
         /// The unclosed mode's declared name.
         mode: &'static str,
     },
-    /// Reading more input from the source failed.
-    Source {
-        /// The byte offset at which the read failed.
-        offset: u64,
-        /// The error returned by the source.
-        error: E,
-    },
 }
 
-impl<E> ScanError<E> {
-    /// Returns the byte range associated with this error, when one exists.
-    ///
-    /// Source errors identify the byte offset where reading failed, but they
-    /// do not identify a range in the input.
+impl ScanError {
+    /// Returns the byte range associated with this error.
     ///
     /// # Examples
     ///
@@ -287,31 +215,25 @@ impl<E> ScanError<E> {
     /// let error: ScanError = ScanError::Unrecognized {
     ///     span: Span::new(4, 5),
     /// };
-    /// assert_eq!(error.span(), Some(Span::new(4, 5)));
+    /// assert_eq!(error.span(), Span::new(4, 5));
     /// ```
     #[must_use]
-    pub const fn span(&self) -> Option<Span> {
+    pub const fn span(&self) -> Span {
         match self {
             Self::Unrecognized { span }
-            | Self::InvalidUtf8 { span }
             | Self::InvalidPayload { span, .. }
-            | Self::TokenTooLong { span, .. }
-            | Self::UnterminatedMode { span, .. } => Some(*span),
-            Self::Source { .. } => None,
+            | Self::UnterminatedMode { span, .. } => *span,
         }
     }
 
     /// Returns the first byte offset associated with this error.
-    ///
-    /// This is the start of the error span for input errors and the read
-    /// failure offset for source errors.
     ///
     /// # Examples
     ///
     /// ```
     /// use runeweaver::{ScanError, Span};
     ///
-    /// let error: ScanError = ScanError::InvalidUtf8 {
+    /// let error = ScanError::Unrecognized {
     ///     span: Span::new(7, 8),
     /// };
     /// assert_eq!(error.offset(), 7);
@@ -320,92 +242,38 @@ impl<E> ScanError<E> {
     pub const fn offset(&self) -> u64 {
         match self {
             Self::Unrecognized { span }
-            | Self::InvalidUtf8 { span }
             | Self::InvalidPayload { span, .. }
-            | Self::TokenTooLong { span, .. }
             | Self::UnterminatedMode { span, .. } => span.start,
-            Self::Source { offset, .. } => *offset,
-        }
-    }
-
-    /// Transforms the source error while preserving the scan error.
-    ///
-    /// The operation is called only for [`ScanError::Source`]. This method can
-    /// also widen a scan error whose source error is
-    /// [`Infallible`](std::convert::Infallible).
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use runeweaver::{ScanError, Span};
-    /// use std::{convert::Infallible, io};
-    ///
-    /// let error: ScanError<Infallible> = ScanError::Unrecognized {
-    ///     span: Span::new(4, 5),
-    /// };
-    /// let error: ScanError<io::Error> =
-    ///     error.map_source_error(|never| match never {});
-    /// assert!(matches!(error, ScanError::Unrecognized { .. }));
-    /// ```
-    #[must_use]
-    pub fn map_source_error<F>(self, operation: impl FnOnce(E) -> F) -> ScanError<F> {
-        match self {
-            Self::Unrecognized { span } => ScanError::Unrecognized { span },
-            Self::InvalidUtf8 { span } => ScanError::InvalidUtf8 { span },
-            Self::InvalidPayload { span, message } => {
-                ScanError::<F>::InvalidPayload { span, message }
-            }
-            Self::TokenTooLong { span, limit } => ScanError::TokenTooLong { span, limit },
-            Self::UnterminatedMode { span, mode } => ScanError::UnterminatedMode { span, mode },
-            Self::Source { offset, error } => ScanError::Source {
-                offset,
-                error: operation(error),
-            },
         }
     }
 }
 
-impl<E: Display> Display for ScanError<E> {
+impl Display for ScanError {
     fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Unrecognized { span } => write!(formatter, "unrecognized input at {span}"),
-            Self::InvalidUtf8 { span } => write!(formatter, "invalid UTF-8 at {span}"),
             Self::InvalidPayload { span, message } => {
                 write!(formatter, "invalid token payload at {span}: {message}")
-            }
-            Self::TokenTooLong { span, limit } => {
-                write!(formatter, "token exceeds the {limit}-byte limit at {span}")
             }
             Self::UnterminatedMode { span, mode } => {
                 write!(formatter, "unterminated lexer mode {mode} at {span}")
             }
-            Self::Source { offset, error } => {
-                write!(formatter, "source error at byte {offset}: {error}")
-            }
         }
     }
 }
 
-impl<E: Error + 'static> Error for ScanError<E> {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        match self {
-            Self::Source { error, .. } => Some(error),
-            _ => None,
-        }
-    }
-}
+impl Error for ScanError {}
 
 /// Iterates over tokens and scanning errors.
 ///
 /// Invalid input and payload errors consume their byte ranges and scanning
 /// continues. A rule's lexical-mode transition still takes effect when its
-/// payload conversion fails. A source error or over-limit token ends iteration
-/// because maximal-munch selection cannot safely produce the current token.
+/// payload conversion fails.
 ///
 /// # Examples
 ///
 /// ```
-/// use runeweaver::{Lexer, Scanner, Slice};
+/// use runeweaver::Lexer;
 ///
 /// #[derive(Debug, PartialEq, Lexer)]
 /// enum Token {
@@ -413,235 +281,43 @@ impl<E: Error + 'static> Error for ScanError<E> {
 ///     Word,
 /// }
 ///
-/// let scanner = Scanner::<Token, _>::new(Slice::from("word"));
-/// assert_eq!(scanner.count(), 1);
+/// assert_eq!(Token::scan("word").count(), 1);
 /// ```
-pub struct Scanner<T, S> {
-    source: S,
-    buffer: Vec<u8>,
-    buffer_start: usize,
-    offset: u64,
+pub struct Scan<'input, T> {
+    input: &'input str,
+    offset: usize,
     modes: Vec<ModeFrame>,
-    eof: bool,
     finished: bool,
     marker: PhantomData<T>,
 }
 
-/// Iterates over tokens while retaining each matched lexeme.
-///
-/// Create this adapter with [`Scanner::with_lexemes`]. Each emitted token owns
-/// a new [`String`]. Skipped rules remain unobservable.
-pub struct LexemeScanner<T, S> {
-    scanner: Scanner<T, S>,
-}
-
 struct ModeFrame {
     id: usize,
-    opened_at: u64,
+    opened_at: usize,
 }
 
-enum SelectionError<E> {
-    Source(E),
-    TokenTooLong { observed: usize, limit: usize },
-}
-
-impl<T, S: Source> Scanner<T, S> {
-    /// Creates a scanner at the beginning of `source`.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use runeweaver::{Lexer, Scanner, Slice};
-    ///
-    /// #[derive(Lexer)]
-    /// enum Token {
-    ///     #[token("x")]
-    ///     X,
-    /// }
-    ///
-    /// let source = Slice::from("x");
-    /// assert!(Scanner::<Token, _>::new(source).next().is_some());
-    /// ```
-    pub fn new(source: S) -> Self {
+impl<'input, T> Scan<'input, T> {
+    fn new(input: &'input str) -> Self {
         Self {
-            source,
-            buffer: Vec::new(),
-            buffer_start: 0,
+            input,
             offset: 0,
             modes: vec![ModeFrame {
                 id: 0,
                 opened_at: 0,
             }],
-            eof: false,
             finished: false,
             marker: PhantomData,
         }
     }
 
     /// Returns the byte offset at which the next token will begin.
-    pub const fn position(&self) -> u64 {
+    pub const fn position(&self) -> usize {
         self.offset
-    }
-
-    /// Requests an owned copy of the matched text with every token.
-    ///
-    /// This is opt-in because it allocates for each emitted token. The adapter
-    /// works with in-memory and streaming sources.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use runeweaver::Lexer;
-    ///
-    /// #[derive(Lexer)]
-    /// enum Token {
-    ///     #[token("[0-9]+")]
-    ///     Integer,
-    /// }
-    ///
-    /// let token = Token::scanner("42")
-    ///     .with_lexemes()
-    ///     .next()
-    ///     .expect("the input has a token")
-    ///     .expect("the input is valid");
-    /// assert_eq!(token.lexeme, "42");
-    /// ```
-    pub fn with_lexemes(self) -> LexemeScanner<T, S> {
-        LexemeScanner { scanner: self }
-    }
-
-    /// Stops scanning and returns all unread input.
-    ///
-    /// The returned source first replays bytes read during token lookahead,
-    /// then continues with the original source.
-    pub fn into_source(self) -> Remainder<S> {
-        Remainder::new(self.buffer, self.buffer_start, self.source)
-    }
-
-    fn unread(&self) -> &[u8] {
-        &self.buffer[self.buffer_start..]
-    }
-
-    fn read_more(&mut self, max_buffered: usize) -> Result<(), S::Error> {
-        const CHUNK_SIZE: usize = 8 * 1024;
-
-        if self.buffer_start > 0 {
-            self.buffer.drain(..self.buffer_start);
-            self.buffer_start = 0;
-        }
-        let available = max_buffered
-            .checked_sub(self.buffer.len())
-            .expect("the scanner buffer stays within its configured capacity");
-        assert!(
-            available > 0,
-            "a buffered read has room for at least one byte"
-        );
-        let mut chunk = [0; CHUNK_SIZE];
-        let capacity = available.min(chunk.len());
-        let length = self.source.read(&mut chunk[..capacity])?;
-        assert!(
-            length <= capacity,
-            "a Source returned more bytes than its buffer can hold"
-        );
-        if length == 0 {
-            self.eof = true;
-        } else {
-            self.buffer.extend_from_slice(&chunk[..length]);
-        }
-        Ok(())
-    }
-
-    fn byte_at(&mut self, index: usize, max_buffered: usize) -> Result<Option<u8>, S::Error> {
-        debug_assert!(index < max_buffered, "buffered byte index exceeds capacity");
-        while index >= self.unread().len() && !self.eof {
-            self.read_more(max_buffered)?;
-        }
-        Ok(self.unread().get(index).copied())
-    }
-
-    fn commit(&mut self, length: usize) {
-        self.buffer_start += length;
-        self.offset = self
-            .offset
-            .checked_add(length as u64)
-            .expect("a source byte offset exceeds u64");
-    }
-
-    fn buffered_end(&self) -> u64 {
-        self.offset
-            .checked_add(self.unread().len() as u64)
-            .expect("a source byte offset exceeds u64")
-    }
-
-    fn invalid_input_length(&mut self, max_buffered: usize) -> Result<(usize, bool), S::Error> {
-        let first = self
-            .byte_at(0, max_buffered)?
-            .expect("invalid input is only measured when one byte is available");
-        let expected = match first {
-            0x00..=0x7f => 1,
-            0xc2..=0xdf => 2,
-            0xe0..=0xef => 3,
-            0xf0..=0xf4 => 4,
-            _ => 1,
-        };
-        for index in 1..expected {
-            if self.byte_at(index, max_buffered)?.is_none() {
-                break;
-            }
-        }
-        let available = expected.min(self.unread().len());
-        match std::str::from_utf8(&self.unread()[..available]) {
-            Ok(_) => Ok((available, false)),
-            Err(error) => Ok((error.error_len().unwrap_or(available), true)),
-        }
     }
 }
 
-impl<T: Lexer, S: Source> Scanner<T, S> {
-    fn select_rule(
-        &mut self,
-        mode: usize,
-        max_buffered: usize,
-    ) -> Result<Option<(usize, usize)>, SelectionError<S::Error>> {
-        let limit = T::max_token_bytes();
-        let mut state = T::start_state(mode).expect("the mode stack contains a generated mode");
-        let mut latest = T::accepting_rule(state).map(|rule| (rule, 0));
-        let mut index = 0;
-
-        loop {
-            let buffered_end = self.unread().len().min(limit);
-            while index < buffered_end {
-                let byte = self.unread()[index];
-                let Some(next) = T::next_state(state, byte) else {
-                    return Ok(latest);
-                };
-                state = next;
-                index += 1;
-                if let Some(rule) = T::accepting_rule(state) {
-                    latest = Some((rule, index));
-                }
-            }
-            if index == limit {
-                let next = self
-                    .byte_at(index, max_buffered)
-                    .map_err(SelectionError::Source)?
-                    .and_then(|byte| T::next_state(state, byte));
-                return next.map_or(Ok(latest), |_| {
-                    Err(SelectionError::TokenTooLong {
-                        observed: index.saturating_add(1),
-                        limit,
-                    })
-                });
-            }
-            if self.eof {
-                return Ok(latest);
-            }
-            self.read_more(max_buffered)
-                .map_err(SelectionError::Source)?;
-        }
-    }
-
-    fn apply_transition(&mut self, transition: Transition, start: u64) {
+impl<T: Lexer> Scan<'_, T> {
+    fn apply_transition(&mut self, transition: Transition, start: usize) {
         match transition {
             Transition::Stay => {}
             Transition::Begin(id) => {
@@ -663,151 +339,78 @@ impl<T: Lexer, S: Source> Scanner<T, S> {
             }
         }
     }
+}
 
-    fn next_with<U>(
-        &mut self,
-        mut attach: impl FnMut(T, Span, &str) -> U,
-    ) -> Option<Result<U, ScanError<S::Error>>> {
+impl<T: Lexer> Iterator for Scan<'_, T> {
+    type Item = Result<Spanned<T>, ScanError>;
+
+    fn next(&mut self) -> Option<Self::Item> {
         if self.finished {
             return None;
         }
         loop {
-            const MAX_UTF8_BYTES: usize = 4;
+            if self.offset == self.input.len() {
+                self.finished = true;
+                return self.modes.get(1).map(|frame| {
+                    Err(ScanError::UnterminatedMode {
+                        span: Span::new(frame.opened_at as u64, self.offset as u64),
+                        mode: T::mode_name(frame.id),
+                    })
+                });
+            }
 
+            let start = self.offset;
             let mode = self
                 .modes
                 .last()
                 .expect("the mode stack contains INITIAL")
                 .id;
-            let max_buffered = T::max_token_bytes().saturating_add(MAX_UTF8_BYTES);
-            let selected = match self.select_rule(mode, max_buffered) {
-                Ok(selected) => selected,
-                Err(SelectionError::Source(error)) => {
-                    self.finished = true;
-                    return Some(Err(ScanError::Source {
-                        offset: self.buffered_end(),
-                        error,
-                    }));
-                }
-                Err(SelectionError::TokenTooLong { observed, limit }) => {
-                    self.finished = true;
-                    let end = self
-                        .offset
-                        .checked_add(observed as u64)
-                        .expect("a source byte offset exceeds u64");
-                    return Some(Err(ScanError::TokenTooLong {
-                        span: Span::new(self.offset, end),
-                        limit,
-                    }));
-                }
-            };
-            let Some((rule, consumed)) = selected else {
-                if self.eof && self.unread().is_empty() {
-                    self.finished = true;
-                    if let Some(frame) = self.modes.get(1) {
-                        return Some(Err(ScanError::UnterminatedMode {
-                            span: Span::new(frame.opened_at, self.offset),
-                            mode: T::mode_name(frame.id),
-                        }));
-                    }
-                    return None;
-                }
-                let (length, invalid_utf8) = match self.invalid_input_length(max_buffered) {
-                    Ok(result) => result,
-                    Err(error) => {
-                        self.finished = true;
-                        return Some(Err(ScanError::Source {
-                            offset: self.buffered_end(),
-                            error,
-                        }));
-                    }
-                };
-                let start = self.offset;
-                self.commit(length);
-                let span = Span::new(start, self.offset);
-                return Some(Err(if invalid_utf8 {
-                    ScanError::InvalidUtf8 { span }
-                } else {
-                    ScanError::Unrecognized { span }
+            let Some(result) = T::scan_one(&self.input[start..], mode) else {
+                self.offset += self.input[start..]
+                    .chars()
+                    .next()
+                    .expect("the input is not empty")
+                    .len_utf8();
+                return Some(Err(ScanError::Unrecognized {
+                    span: Span::new(start as u64, self.offset as u64),
                 }));
             };
 
-            let start = self.offset;
-            let end = start
-                .checked_add(consumed as u64)
-                .expect("a source byte offset exceeds u64");
-            let span = Span::new(start, end);
-            let result = {
-                let text = std::str::from_utf8(&self.unread()[..consumed])
-                    .expect("a generated lexer only accepts valid UTF-8");
-                T::run_action(rule, text).map(|(token, transition)| {
-                    (token.map(|token| attach(token, span, text)), transition)
-                })
-            };
-            self.commit(consumed);
-            let (token, transition) = match result {
-                Ok(result) => result,
-                Err(error) => {
-                    self.apply_transition(error.transition(), start);
+            let (token, token_start, consumed, transition) = match result {
+                Ok((token, token_start, consumed, transition)) => {
+                    (token, token_start, consumed, transition)
+                }
+                Err((error, token_start, consumed)) => {
+                    self.offset += consumed;
+                    self.apply_transition(error.transition(), start + token_start);
                     return Some(Err(ScanError::InvalidPayload {
-                        span,
+                        span: Span::new(
+                            (start + token_start) as u64,
+                            self.offset as u64,
+                        ),
                         message: error.to_string(),
                     }));
                 }
             };
-            self.apply_transition(transition, start);
+            assert!(consumed > 0, "a generated lexer consumed an empty match");
+            self.offset += consumed;
+            self.apply_transition(transition, start + token_start);
             if let Some(token) = token {
-                return Some(Ok(token));
+                return Some(Ok(Spanned {
+                    token,
+                    span: Span::new(
+                        (start + token_start) as u64,
+                        self.offset as u64,
+                    ),
+                }));
             }
         }
     }
 }
 
-impl<T: Lexer, S: Source> Iterator for Scanner<T, S> {
-    type Item = Result<Spanned<T>, ScanError<S::Error>>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        self.next_with(|token, span, _| Spanned { token, span })
-    }
-}
-
-impl<T, S: Source> LexemeScanner<T, S> {
-    /// Returns the byte offset at which the next token will begin.
-    pub const fn position(&self) -> u64 {
-        self.scanner.position()
-    }
-
-    /// Stops retaining lexemes and returns the underlying scanner.
-    pub fn into_scanner(self) -> Scanner<T, S> {
-        self.scanner
-    }
-
-    /// Stops scanning and returns all unread input.
-    ///
-    /// The returned source first replays bytes read during token lookahead,
-    /// then continues with the original source.
-    pub fn into_source(self) -> Remainder<S> {
-        self.scanner.into_source()
-    }
-}
-
-impl<T: Lexer, S: Source> Iterator for LexemeScanner<T, S> {
-    type Item = Result<SpannedLexeme<T>, ScanError<S::Error>>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        self.scanner.next_with(|token, span, text| SpannedLexeme {
-            token,
-            span,
-            lexeme: text.to_owned(),
-        })
-    }
-}
-
 /// Scans UTF-8 input with a generated lexer.
 ///
-/// Only the `Lexer` derive macro implements this trait. The scanner trusts
-/// the generated methods, thus a hand-written implementation can break a
-/// scan.
+/// Only the `Lexer` derive macro implements this trait.
 ///
 /// # Examples
 ///
@@ -820,64 +423,24 @@ impl<T: Lexer, S: Source> Iterator for LexemeScanner<T, S> {
 ///     Word,
 /// }
 ///
-/// assert_eq!(Token::scan("word"), Some((Token::Word, 4)));
+/// let token = Token::scan("word").next().expect("one token")?;
+/// assert_eq!(token.token, Token::Word);
+/// # Ok::<(), runeweaver::ScanError>(())
 /// ```
 pub trait Lexer: __private::Sealed + Sized {
-    /// Returns the maximum candidate-token length retained by a scanner.
-    #[doc(hidden)]
-    fn max_token_bytes() -> usize {
-        DEFAULT_MAX_TOKEN_BYTES
-    }
-
-    /// Returns the DFA start state for a generated start condition.
-    #[doc(hidden)]
-    fn start_state(mode: usize) -> Option<usize>;
-
-    /// Advances the generated DFA by one byte.
-    #[doc(hidden)]
-    fn next_state(state: usize, byte: u8) -> Option<usize>;
-
-    /// Returns the winning rule at an accepting DFA state.
-    #[doc(hidden)]
-    fn accepting_rule(state: usize) -> Option<usize>;
-
-    /// Executes a generated rule action for an accepted lexeme.
-    #[doc(hidden)]
-    fn run_action(rule: usize, text: &str) -> Result<(Option<Self>, Transition), PayloadError>;
-
     /// Scans one token or skipped rule from the start of a string.
     ///
     /// `None` means no rule accepts a prefix. A successful result contains a
     /// skipped rule or token plus its consumed byte length. An error means a
     /// winning rule could not convert its payload.
     #[doc(hidden)]
-    fn scan_one(input: &str, mode: usize) -> Option<RuleScan<Self>> {
-        let mut state = Self::start_state(mode)?;
-        let mut latest = Self::accepting_rule(state).map(|rule| (rule, 0));
-
-        for (index, &byte) in input.as_bytes().iter().enumerate() {
-            let Some(next) = Self::next_state(state, byte) else {
-                break;
-            };
-            state = next;
-            if let Some(rule) = Self::accepting_rule(state) {
-                latest = Some((rule, index + 1));
-            }
-        }
-
-        let (rule, length) = latest?;
-        Some(
-            Self::run_action(rule, &input[..length])
-                .map(|(token, transition)| (token, length, transition))
-                .map_err(|error| (error, length)),
-        )
-    }
+    fn scan_one(input: &str, mode: usize) -> Option<RuleScan<Self>>;
 
     /// Returns a generated start-condition name for diagnostics.
     #[doc(hidden)]
     fn mode_name(mode: usize) -> &'static str;
 
-    /// Creates a recoverable scanner for `input`.
+    /// Scans tokens from `input`.
     ///
     /// # Examples
     ///
@@ -890,39 +453,9 @@ pub trait Lexer: __private::Sealed + Sized {
     ///     Word,
     /// }
     ///
-    /// assert_eq!(Token::scanner("word").count(), 1);
+    /// assert_eq!(Token::scan("word").count(), 1);
     /// ```
-    fn scanner(input: &str) -> Scanner<Self, Slice<'_>> {
-        Self::scanner_from(Slice::from(input))
-    }
-
-    /// Creates a recoverable scanner over any byte source.
-    ///
-    /// Use [`Slice`] for in-memory input, [`Reader`] for [`std::io::Read`]
-    /// values such as files, or implement [`Source`] for custom storage.
-    fn scanner_from<S: Source>(source: S) -> Scanner<Self, S> {
-        Scanner::new(source)
-    }
-
-    /// Returns the first token in `input`, if one is accepted before an error.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use runeweaver::Lexer;
-    ///
-    /// #[derive(Debug, PartialEq, Lexer)]
-    /// enum Token {
-    ///     #[token("[0-9]+")]
-    ///     Integer,
-    /// }
-    ///
-    /// assert_eq!(Token::scan("42!"), Some((Token::Integer, 2)));
-    /// ```
-    fn scan(input: &str) -> Option<(Self, usize)> {
-        Self::scanner(input)
-            .next()?
-            .ok()
-            .map(|spanned| (spanned.token, spanned.span.end as usize))
+    fn scan(input: &str) -> Scan<'_, Self> {
+        Scan::new(input)
     }
 }
