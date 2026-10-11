@@ -115,8 +115,7 @@ pub struct PayloadError {
 
 /// The result of selecting and executing one lexer rule.
 #[doc(hidden)]
-pub type RuleScan<T> =
-    Result<(Option<T>, usize, usize, Transition), (PayloadError, usize, usize)>;
+pub type RuleScan<T> = Result<(Option<T>, usize, usize, Transition), (PayloadError, usize, usize)>;
 
 /// A generated lexer rule's update to the start-condition stack.
 #[doc(hidden)]
@@ -384,10 +383,7 @@ impl<T: Lexer> Iterator for Scan<'_, T> {
                     self.offset += consumed;
                     self.apply_transition(error.transition(), start + token_start);
                     return Some(Err(ScanError::InvalidPayload {
-                        span: Span::new(
-                            (start + token_start) as u64,
-                            self.offset as u64,
-                        ),
+                        span: Span::new((start + token_start) as u64, self.offset as u64),
                         message: error.to_string(),
                     }));
                 }
@@ -398,10 +394,7 @@ impl<T: Lexer> Iterator for Scan<'_, T> {
             if let Some(token) = token {
                 return Some(Ok(Spanned {
                     token,
-                    span: Span::new(
-                        (start + token_start) as u64,
-                        self.offset as u64,
-                    ),
+                    span: Span::new((start + token_start) as u64, self.offset as u64),
                 }));
             }
         }

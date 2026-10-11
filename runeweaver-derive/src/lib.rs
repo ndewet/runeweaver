@@ -200,10 +200,7 @@ fn lexer_attributes(attributes: &[syn::Attribute]) -> Result<LexerConfig> {
                 return Ok(());
             }
             if config.name != "skip" {
-                return Err(Error::new_spanned(
-                    attribute,
-                    "expected `mode` or `skip`",
-                ));
+                return Err(Error::new_spanned(attribute, "expected `mode` or `skip`"));
             }
             let pattern = config.pattern.expect("skip attribute has a pattern");
             if config.rule.converter.is_some() {

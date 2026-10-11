@@ -483,7 +483,7 @@ impl Lexer {
 ///     RuleSpec::skip(r"\s+"),
 ///     RuleSpec::emit("[a-z]+", quote::quote!(Ok(Some(Self::Word)))),
 /// ])?;
-/// assert!(generated.to_string().contains("__runeweaver_transition"));
+/// assert!(generated.to_string().contains("__runeweaver_select"));
 /// # Ok::<(), runeweaver_codegen::CompileError>(())
 /// ```
 pub fn compile(specifications: Vec<RuleSpec>) -> Result<TokenStream, CompileError> {

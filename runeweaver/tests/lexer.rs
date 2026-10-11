@@ -338,9 +338,15 @@ enum Repetition {
 
 #[test]
 fn derived_lexer_handles_open_ended_and_nullable_repetition() {
-    assert_eq!(Repetition::scan("aaab"), Some((Repetition::OpenEnded, 4)));
-    assert_eq!(Repetition::scan("b"), Some((Repetition::NullableLoop, 1)));
-    assert_eq!(Repetition::scan("aaa"), None);
+    assert_eq!(
+        first::<Repetition>("aaab"),
+        Some((Repetition::OpenEnded, 4))
+    );
+    assert_eq!(
+        first::<Repetition>("b"),
+        Some((Repetition::NullableLoop, 1))
+    );
+    assert_eq!(first::<Repetition>("aaa"), None);
 }
 
 #[derive(Debug, PartialEq, Lexer)]
@@ -805,24 +811,141 @@ enum RegionToken {
 }
 
 fn interpreted_region(input: &str) -> Option<(RegionToken, usize)> {
-    interpreted_token::<RegionToken>(input)
-}
+    let bytes = input.as_bytes();
+    let mut latest = None;
+    let mut select = |token, end| {
+        if latest.as_ref().is_none_or(|(_, current)| end > *current) {
+            latest = Some((token, end));
+        }
+    };
 
-fn interpreted_token<T: Lexer>(input: &str) -> Option<(T, usize)> {
-    let mut state = T::start_state(0)?;
-    let mut latest = T::accepting_rule(state).map(|rule| (rule, 0));
-    for (offset, &byte) in input.as_bytes().iter().enumerate() {
-        let Some(next) = T::next_state(state, byte) else {
-            break;
-        };
-        state = next;
-        if let Some(rule) = T::accepting_rule(state) {
-            latest = Some((rule, offset + 1));
+    match bytes.first() {
+        Some(&b'a') => select(RegionToken::A, 1),
+        Some(&b'b') => select(RegionToken::B, 1),
+        Some(&b'z') => select(RegionToken::Z, 1),
+        Some(&b'q') => select(RegionToken::Q, 1),
+        Some(&b'p') => select(RegionToken::P, 1),
+        _ => {}
+    }
+    if bytes.len() >= 3 && matches!(bytes[0], b'a' | b'b' | b'x') && &bytes[1..3] == b"cd" {
+        select(RegionToken::General, 3);
+    }
+    if bytes.len() >= 3 && matches!(bytes[0], b'z' | b'y') && &bytes[1..3] == b"ef" {
+        select(RegionToken::Fixed, 3);
+    }
+
+    if bytes.first() == Some(&b'q') {
+        let mut end = 1;
+        while input[end..].starts_with("rq") {
+            end += 2;
+        }
+        if input[end..].starts_with('s') {
+            select(RegionToken::Cycle, end + 1);
         }
     }
-    let (rule, end) = latest?;
-    let (token, _) = T::run_action(rule, &input[..end]).ok()?;
-    Some((token?, end))
+
+    if bytes
+        .first()
+        .is_some_and(|byte| matches!(*byte, b'p' | b't'))
+    {
+        let mut end = 1;
+        while input[end..].starts_with("uv") {
+            end += 2;
+        }
+        if input[end..].starts_with('w') {
+            select(RegionToken::OptionalCycle, end + 1);
+        }
+    }
+
+    let mut end = 0;
+    loop {
+        if input[end..].starts_with('m') {
+            select(RegionToken::RepeatedAccept, end + 1);
+        }
+        if input[end..].starts_with("mn") {
+            end += 2;
+        } else {
+            break;
+        }
+    }
+
+    if input.starts_with('"') {
+        let mut end = 1;
+        while end < input.len() {
+            let character = input[end..]
+                .chars()
+                .next()
+                .expect("the offset is inside the input");
+            if character == '"' {
+                select(RegionToken::Quoted, end + 1);
+                break;
+            }
+            if character == '\\' {
+                end += 1;
+                let Some(escaped) = input[end..].chars().next() else {
+                    break;
+                };
+                if escaped == '\n' {
+                    break;
+                }
+                end += escaped.len_utf8();
+            } else {
+                end += character.len_utf8();
+            }
+        }
+    }
+
+    latest
+}
+
+fn interpreted_membership(input: &str) -> Option<(MembershipToken, usize)> {
+    let bytes = input.as_bytes();
+    let mut latest = input
+        .starts_with("private")
+        .then_some((MembershipToken::Private, "private".len()));
+    if input.starts_with("primitive")
+        && latest
+            .as_ref()
+            .is_none_or(|(_, end)| "primitive".len() > *end)
+    {
+        latest = Some((MembershipToken::Primitive, "primitive".len()));
+    }
+    if bytes
+        .first()
+        .is_some_and(|byte| matches!(*byte, b'a'..=b'z' | b'A'..=b'Z' | b'_' | b'$'))
+    {
+        let end = bytes
+            .iter()
+            .take_while(
+                |&&byte| matches!(byte, b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'_' | b'$'),
+            )
+            .count();
+        if latest.as_ref().is_none_or(|(_, current)| end > *current) {
+            latest = Some((MembershipToken::Identifier, end));
+        }
+    }
+    latest
+}
+
+fn interpreted_cycle_accept(input: &str) -> Option<(CycleAcceptToken, usize)> {
+    let mut latest = None;
+    let mut offset = 0;
+    loop {
+        if input[offset..].starts_with('a') {
+            latest = Some((CycleAcceptToken::First, offset + 1));
+        }
+        if input[offset..].starts_with("cd") {
+            latest = Some((CycleAcceptToken::Second, offset + 2));
+        }
+        if input[offset..].starts_with("ab") {
+            offset += 2;
+        } else if input[offset..].starts_with("cdb") {
+            offset += 3;
+        } else {
+            break;
+        }
+    }
+    latest
 }
 
 #[derive(Debug, PartialEq, Lexer)]
@@ -897,11 +1020,7 @@ fn nested_cycle_paths_preserve_different_saved_rules_and_end_offsets() {
             let selected = CycleAcceptToken::scan_one(input, 0)
                 .and_then(Result::ok)
                 .and_then(|(token, _, end, _)| token.map(|token| (token, end)));
-            assert_eq!(
-                selected,
-                interpreted_token::<CycleAcceptToken>(input),
-                "{input}"
-            );
+            assert_eq!(selected, interpreted_cycle_accept(input), "{input}");
         }
     }
 }
@@ -914,11 +1033,7 @@ fn local_membership_tables_preserve_all_byte_ranges_and_keyword_fallbacks() {
             let selected = MembershipToken::scan_one(&input, 0)
                 .and_then(Result::ok)
                 .and_then(|(token, _, end, _)| token.map(|token| (token, end)));
-            assert_eq!(
-                selected,
-                interpreted_token::<MembershipToken>(&input),
-                "{input:?}"
-            );
+            assert_eq!(selected, interpreted_membership(&input), "{input:?}");
         }
     }
     for input in [
@@ -933,11 +1048,7 @@ fn local_membership_tables_preserve_all_byte_ranges_and_keyword_fallbacks() {
         let selected = MembershipToken::scan_one(input, 0)
             .and_then(Result::ok)
             .and_then(|(token, _, end, _)| token.map(|token| (token, end)));
-        assert_eq!(
-            selected,
-            interpreted_token::<MembershipToken>(input),
-            "{input}"
-        );
+        assert_eq!(selected, interpreted_membership(input), "{input}");
     }
 }
 
