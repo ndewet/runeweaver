@@ -20,7 +20,7 @@ fn benchmarks(criterion: &mut Criterion) {
             case::definition,
         )],
     );
-    support::scanner::benchmarks::<case::Token>(criterion, &name, case::SOURCE);
+    support::scan::benchmark::<case::Token>(criterion, &name, case::SOURCE);
 }
 
 criterion_group! {

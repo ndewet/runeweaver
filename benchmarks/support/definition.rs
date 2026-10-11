@@ -1,12 +1,12 @@
 use crate::support::generation::Input;
 use quote::quote;
-use runeweaver_codegen::{RuleSpec, Transition};
+use runeweaver_codegen::{ModeAction, RuleSpec};
 use syn::parse::{Parse, ParseStream};
-use syn::{Data, DeriveInput, Expr, Fields, LitInt, LitStr, Type};
+use syn::{Data, DeriveInput, Expr, Fields, LitStr, Type};
 
 struct Rule {
     modes: Vec<String>,
-    transition: Transition,
+    mode_action: ModeAction,
     converter: Option<Expr>,
 }
 
@@ -14,7 +14,7 @@ impl Rule {
     fn stay() -> Self {
         Self {
             modes: vec!["INITIAL".into()],
-            transition: Transition::Stay,
+            mode_action: ModeAction::Stay,
             converter: None,
         }
     }
@@ -56,16 +56,6 @@ impl Parse for LexerAttribute {
             });
         }
 
-        if name == "max_token_bytes" {
-            let _: LitInt = input.parse()?;
-            return Ok(Self {
-                name: name.to_string(),
-                mode: None,
-                pattern: None,
-                rule: Rule::stay(),
-            });
-        }
-
         let pattern = input.parse()?;
         Ok(Self {
             name: name.to_string(),
@@ -89,18 +79,18 @@ fn parse_rule(input: ParseStream<'_>) -> syn::Result<Rule> {
             "push" => {
                 input.parse::<syn::Token![=]>()?;
                 let mode: syn::Ident = input.parse()?;
-                rule.transition = Transition::Push(mode.to_string());
+                rule.mode_action = ModeAction::Push(mode.to_string());
             }
             "begin" => {
                 input.parse::<syn::Token![=]>()?;
                 let mode: syn::Ident = input.parse()?;
-                rule.transition = Transition::Begin(mode.to_string());
+                rule.mode_action = ModeAction::Begin(mode.to_string());
             }
             "with" => {
                 input.parse::<syn::Token![=]>()?;
                 rule.converter = Some(input.parse()?);
             }
-            "pop" => rule.transition = Transition::Pop,
+            "pop" => rule.mode_action = ModeAction::Pop,
             _ => return Err(input.error("unsupported lexer rule modifier")),
         }
     }
@@ -120,7 +110,7 @@ fn parse_modes(input: ParseStream<'_>) -> syn::Result<Vec<String>> {
 }
 
 fn configure(spec: RuleSpec, rule: Rule) -> RuleSpec {
-    spec.in_modes(rule.modes).transition(rule.transition)
+    spec.in_modes(rule.modes).mode_action(rule.mode_action)
 }
 
 pub fn parse(source: &str) -> Input {
@@ -145,7 +135,6 @@ pub fn parse(source: &str) -> Input {
                 RuleSpec::skip(attribute.pattern.expect("a skip has a pattern").value()),
                 attribute.rule,
             )),
-            "max_token_bytes" => {}
             _ => panic!("unsupported benchmark lexer attribute"),
         }
     }
@@ -170,7 +159,7 @@ pub fn parse(source: &str) -> Input {
                 }
                 if let Some(converter) = attribute.rule.converter.as_ref() {
                     quote! {
-                        ::runeweaver::PayloadResult::<#payload>::into_payload(
+                        ::runeweaver::payload::PayloadResult::<#payload>::into_payload(
                             (#converter)(text),
                         )
                         .map(|payload| Some(Self::#ident(payload)))

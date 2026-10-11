@@ -11,10 +11,10 @@
 
 // The derive entry point will use these modules when the lexer pipeline exists.
 mod automata;
+mod compiler;
 mod emitter;
-mod lexer;
 mod regex;
+mod specification;
 
-pub use lexer::{
-    CompileError, RuleSpec, Transition, compile, compile_with_modes, compile_with_modes_at,
-};
+pub use compiler::{CompileError, compile, compile_with_modes, compile_with_modes_at};
+pub use specification::{ModeAction, RuleSpec};

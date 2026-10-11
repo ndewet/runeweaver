@@ -4,9 +4,9 @@ use std::{fmt, ops::Range};
 
 /// A half-open range of UTF-8 byte offsets.
 ///
-/// An offset is absolute, and it starts at zero when the scanner starts.
-/// An offset uses `u64`, because a stream can be longer than `usize`.
-/// An offset carries no source identity. Use the scanner that made the span.
+/// An offset is absolute, and it starts at zero at the beginning of a scan.
+/// An offset carries no input identity. Use it with the string that produced
+/// the span.
 ///
 /// # Examples
 ///
@@ -19,9 +19,9 @@ use std::{fmt, ops::Range};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Span {
     /// The inclusive start of the range.
-    pub start: u64,
+    pub start: usize,
     /// The exclusive end of the range.
-    pub end: u64,
+    pub end: usize,
 }
 
 impl Span {
@@ -35,7 +35,7 @@ impl Span {
     /// assert_eq!(Span::at(3), Span::new(3, 3));
     /// ```
     #[must_use]
-    pub const fn at(offset: u64) -> Self {
+    pub const fn at(offset: usize) -> Self {
         Self::new(offset, offset)
     }
 
@@ -49,7 +49,7 @@ impl Span {
     /// assert_eq!(Span::new(2, 5).start, 2);
     /// ```
     #[must_use]
-    pub const fn new(start: u64, end: u64) -> Self {
+    pub const fn new(start: usize, end: usize) -> Self {
         Self { start, end }
     }
 
@@ -65,7 +65,7 @@ impl Span {
     /// assert_eq!(Span::new(2, 5).len(), 3);
     /// ```
     #[must_use]
-    pub const fn len(&self) -> u64 {
+    pub const fn len(&self) -> usize {
         self.end.saturating_sub(self.start)
     }
 
@@ -113,29 +113,25 @@ impl Span {
         )
     }
 
-    /// Converts the range for an index into memory.
-    ///
-    /// Returns `None` if an offset does not fit in `usize`.
+    /// Returns this span as a range suitable for indexing the scanned string.
     ///
     /// # Examples
     ///
     /// ```
     /// use runeweaver::Span;
     ///
-    /// assert_eq!(Span::new(2, 5).range(), Some(2..5));
+    /// assert_eq!(Span::new(2, 5).range(), 2..5);
     /// ```
     #[must_use]
-    pub fn range(&self) -> Option<Range<usize>> {
-        let start = usize::try_from(self.start).ok()?;
-        let end = usize::try_from(self.end).ok()?;
-        Some(start..end)
+    pub const fn range(&self) -> Range<usize> {
+        self.start..self.end
     }
 
     /// Returns the lexeme that this span identifies in `input`.
     ///
     /// Returns `None` if the range is outside `input`, if the range does not
-    /// start and end at a character boundary, or if an offset does not fit in
-    /// `usize`. Give the same input that the scanner read.
+    /// start and end at a character boundary. Give the same input that was
+    /// scanned.
     ///
     /// # Examples
     ///
@@ -147,19 +143,55 @@ impl Span {
     /// ```
     #[must_use]
     pub fn text<'a>(&self, input: &'a str) -> Option<&'a str> {
-        input.get(self.range()?)
+        input.get(self.range())
     }
 }
 
-impl From<Range<u64>> for Span {
-    fn from(range: Range<u64>) -> Self {
+impl From<Range<usize>> for Span {
+    fn from(range: Range<usize>) -> Self {
         Self::new(range.start, range.end)
     }
 }
 
-impl From<Span> for Range<u64> {
+impl From<Span> for Range<usize> {
     fn from(span: Span) -> Self {
         span.start..span.end
+    }
+}
+
+/// A token together with its byte range in the input.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Spanned<T> {
+    /// The token accepted by the lexer.
+    pub token: T,
+    /// The half-open UTF-8 byte range matched by this token.
+    pub span: Span,
+}
+
+impl<T> Spanned<T> {
+    /// Transforms the token while preserving its span.
+    #[must_use]
+    pub fn map<U>(self, operation: impl FnOnce(T) -> U) -> Spanned<U> {
+        Spanned {
+            token: operation(self.token),
+            span: self.span,
+        }
+    }
+
+    /// Tries to transform the token while preserving its span.
+    ///
+    /// # Errors
+    ///
+    /// Returns the error from `transformation` when the token cannot be
+    /// transformed.
+    pub fn try_map<U, E>(
+        self,
+        transformation: impl FnOnce(T) -> Result<U, E>,
+    ) -> Result<Spanned<U>, E> {
+        transformation(self.token).map(|token| Spanned {
+            token,
+            span: self.span,
+        })
     }
 }
 

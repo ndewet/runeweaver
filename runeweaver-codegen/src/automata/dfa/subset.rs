@@ -405,7 +405,7 @@ mod tests {
     }
 
     #[test]
-    fn construction_keeps_each_nfa_start_condition_separate() {
+    fn construction_keeps_each_nfa_start_state_separate() {
         let mut builder: NfaBuilder<ByteRange> = NfaBuilder::new();
         let first_start = builder.add_state();
         let second_start = builder.add_state();

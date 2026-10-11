@@ -1,16 +1,18 @@
 //! Renders minimized lexer automata as Rust source.
 
 use crate::automata::{dfa::Dfa, encoding::ByteRange};
-use crate::lexer::{Lexer, ResolvedTransition, RuleId};
+use crate::compiler::{LexerDefinition, ResolvedModeAction, RuleId};
 use proc_macro2::TokenStream;
 use quote::quote;
 
 /// Renders a minimized byte-oriented lexer DFA as Rust matcher tokens.
 pub(crate) fn emit(
     dfa: &Dfa<ByteRange, RuleId>,
-    lexer: &Lexer,
+    lexer: &LexerDefinition,
     runtime: &TokenStream,
 ) -> TokenStream {
+    let lexer_runtime = quote!(#runtime::lexer);
+    let payload_runtime = quote!(#runtime::payload);
     let starts: Vec<_> = dfa
         .start_states()
         .iter()
@@ -55,40 +57,39 @@ pub(crate) fn emit(
         .enumerate()
         .map(|(index, rule)| {
             let action = rule.action().rendered();
-            let transition = match rule.transition() {
-                ResolvedTransition::Stay => quote!(#runtime::Transition::Stay),
-                ResolvedTransition::Begin(id) => {
+            let mode_action = match rule.mode_action() {
+                ResolvedModeAction::Stay => quote!(#lexer_runtime::ModeAction::Stay),
+                ResolvedModeAction::Begin(id) => {
                     let id = id.index();
-                    quote!(#runtime::Transition::Begin(#id))
+                    quote!(#lexer_runtime::ModeAction::Begin(#id))
                 }
-                ResolvedTransition::Push(id) => {
+                ResolvedModeAction::Push(id) => {
                     let id = id.index();
-                    quote!(#runtime::Transition::Push(#id))
+                    quote!(#lexer_runtime::ModeAction::Push(#id))
                 }
-                ResolvedTransition::Pop => quote!(#runtime::Transition::Pop),
+                ResolvedModeAction::Pop => quote!(#lexer_runtime::ModeAction::Pop),
             };
             quote! {
                 #index => {
-                    let result: Result<Option<Self>, #runtime::PayloadError> = #action;
+                    let result: Result<Option<Self>, #payload_runtime::PayloadError> = #action;
                     result
-                        .map(|token| (token, #transition))
-                        .map_err(|error| error.with_transition(#transition))
+                        .map(|token| #lexer_runtime::RuleOutput {
+                            token,
+                            mode_action: #mode_action,
+                        })
+                        .map_err(|error| error.with_mode_action(#mode_action))
                 },
             }
         })
         .collect();
-    let mode_names = lexer
-        .start_conditions()
-        .iter()
-        .enumerate()
-        .map(|(index, mode)| {
-            let name = mode.name();
-            quote!(#index => #name,)
-        });
+    let mode_names = lexer.modes().iter().enumerate().map(|(index, mode)| {
+        let name = mode.name();
+        quote!(#index => #name,)
+    });
 
     quote! {
-        fn __runeweaver_start(start_condition: usize) -> Option<usize> {
-            match start_condition {
+        fn __runeweaver_start(mode: usize) -> Option<usize> {
+            match mode {
                 #(#starts)*
                 _ => None,
             }
@@ -111,7 +112,7 @@ pub(crate) fn emit(
         fn __runeweaver_action(
             rule: usize,
             text: &str,
-        ) -> Result<(Option<Self>, #runtime::Transition), #runtime::PayloadError> {
+        ) -> Result<#lexer_runtime::RuleOutput<Self>, #payload_runtime::PayloadError> {
             match rule {
                 #(#actions)*
                 _ => unreachable!("generated lexer selected an unknown rule"),
@@ -128,19 +129,20 @@ pub(crate) fn emit(
 mod tests {
     use super::*;
     use crate::automata::dfa::Builder;
-    use crate::lexer::{Rule, RuleAction, StartCondition};
+    use crate::compiler::{Mode, Rule};
     use crate::regex::Expression;
+    use crate::specification::RuleAction;
     use std::str::FromStr;
 
-    fn lexer(action: TokenStream) -> Lexer {
-        Lexer::new(
+    fn lexer(action: TokenStream) -> LexerDefinition {
+        LexerDefinition::new(
             vec![Rule::new(
                 Expression::from_str("a").expect("the test pattern is valid"),
                 RuleAction::Emit(action),
-                vec![crate::lexer::StartConditionId::new(0)],
-                ResolvedTransition::Stay,
+                vec![crate::compiler::ModeId::new(0)],
+                ResolvedModeAction::Stay,
             )],
-            vec![StartCondition::new("INITIAL")],
+            vec![Mode::new("INITIAL")],
         )
     }
 
@@ -152,9 +154,14 @@ mod tests {
             .build(&[start])
             .expect("the test DFA is below its capacity");
 
-        let actual = emit(&dfa, &Lexer::new(vec![], vec![]), &quote!(::runeweaver)).to_string();
+        let actual = emit(
+            &dfa,
+            &LexerDefinition::new(vec![], vec![]),
+            &quote!(::runeweaver),
+        )
+        .to_string();
         assert!(actual.contains("0usize => Some (0usize)"));
-        assert!(actual.contains("Result < (Option < Self > , :: runeweaver :: Transition)"));
+        assert!(actual.contains("Result < :: runeweaver :: lexer :: RuleOutput < Self >"));
         assert!(actual.contains("fn __runeweaver_mode_name"));
         assert!(actual.contains("fn __runeweaver_transition"));
         assert!(actual.contains("fn __runeweaver_accept"));
@@ -175,6 +182,6 @@ mod tests {
         assert!(emitted.contains("97u8 ..= 122u8 => Some (1usize)"));
         assert!(emitted.contains("1usize => Some (0usize)"));
         assert!(emitted.contains("Rule :: Token (7)"));
-        assert!(emitted.contains("Transition :: Stay"));
+        assert!(emitted.contains("ModeAction :: Stay"));
     }
 }

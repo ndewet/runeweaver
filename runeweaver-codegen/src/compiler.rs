@@ -1,8 +1,8 @@
-//! Compiler-internal representation of one lexer declaration.
+//! Compiles one lexer specification into generated Rust source.
 //!
 //! This model separates lexer semantics from the automata built from them.
 //! Automata retain [`RuleId`] values at accepting states; the associated
-//! pattern, action, and start-condition membership remain here.
+//! pattern, action, and mode membership remain here.
 
 use crate::automata::{
     BuildError, dfa,
@@ -11,119 +11,13 @@ use crate::automata::{
 };
 use crate::emitter;
 use crate::regex::{Expression, ParseError};
+use crate::specification::{ModeAction, RuleAction, RuleSpec};
 use proc_macro2::TokenStream;
 use quote::quote;
 use std::fmt::{Display, Formatter};
 
 const MAX_EXPANDED_PATTERN_SIZE: usize = 100_000;
 
-/// One rule supplied to the code generator.
-///
-/// # Examples
-///
-/// ```
-/// use runeweaver_codegen::RuleSpec;
-///
-/// let rule = RuleSpec::skip(r"\s+");
-/// let _ = rule;
-/// ```
-pub struct RuleSpec {
-    pattern: String,
-    action: RuleAction,
-    modes: Vec<String>,
-    transition: Transition,
-}
-
-/// A state-stack operation performed after a rule is accepted.
-///
-/// # Examples
-///
-/// ```
-/// use runeweaver_codegen::Transition;
-///
-/// let transition = Transition::Push("String".into());
-/// assert!(matches!(transition, Transition::Push(name) if name == "String"));
-/// ```
-#[derive(Clone)]
-pub enum Transition {
-    /// Leave the stack unchanged.
-    Stay,
-    /// Replace the current mode.
-    Begin(String),
-    /// Push a mode onto the stack.
-    Push(String),
-    /// Pop the current mode.
-    Pop,
-}
-
-impl RuleSpec {
-    /// Creates a rule from its regex pattern and generated Rust action.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use runeweaver_codegen::RuleSpec;
-    ///
-    /// let rule = RuleSpec::emit("[a-z]+", quote::quote!(Ok(Some(Self::Word))));
-    /// let _ = rule;
-    /// ```
-    pub fn emit(pattern: impl Into<String>, action: TokenStream) -> Self {
-        Self {
-            pattern: pattern.into(),
-            action: RuleAction::Emit(action),
-            modes: vec!["INITIAL".into()],
-            transition: Transition::Stay,
-        }
-    }
-    /// Creates a rule that consumes input without producing a token.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use runeweaver_codegen::RuleSpec;
-    ///
-    /// let rule = RuleSpec::skip(r"\s+");
-    /// let _ = rule;
-    /// ```
-    pub fn skip(pattern: impl Into<String>) -> Self {
-        Self {
-            pattern: pattern.into(),
-            action: RuleAction::Skip,
-            modes: vec!["INITIAL".into()],
-            transition: Transition::Stay,
-        }
-    }
-
-    /// Restricts this rule to named start conditions.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use runeweaver_codegen::RuleSpec;
-    ///
-    /// let rule = RuleSpec::skip("end").in_modes(vec!["String".into()]);
-    /// let _ = rule;
-    /// ```
-    pub fn in_modes(mut self, modes: Vec<String>) -> Self {
-        self.modes = modes;
-        self
-    }
-
-    /// Sets the start-condition-stack transition after this rule matches.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use runeweaver_codegen::{RuleSpec, Transition};
-    ///
-    /// let rule = RuleSpec::skip("end").transition(Transition::Pop);
-    /// let _ = rule;
-    /// ```
-    pub fn transition(mut self, transition: Transition) -> Self {
-        self.transition = transition;
-        self
-    }
-}
 /// Reports a lexer compilation failure.
 ///
 /// # Examples
@@ -192,7 +86,7 @@ impl From<BuildError> for CompileError {
     }
 }
 
-/// Identifies a rule in one [`Lexer`].
+/// Identifies a rule in one [`LexerDefinition`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub(crate) struct RuleId(usize);
 
@@ -208,17 +102,17 @@ impl RuleId {
     }
 }
 
-/// Identifies a start condition in one [`Lexer`].
+/// Identifies a mode in one [`LexerDefinition`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub(crate) struct StartConditionId(usize);
+pub(crate) struct ModeId(usize);
 
-impl StartConditionId {
-    /// Creates an identifier for the start condition at `index`.
+impl ModeId {
+    /// Creates an identifier for the mode at `index`.
     pub(crate) const fn new(index: usize) -> Self {
         Self(index)
     }
 
-    /// Returns the start condition's declaration index.
+    /// Returns the mode's declaration index.
     pub(crate) const fn index(self) -> usize {
         self.0
     }
@@ -226,12 +120,12 @@ impl StartConditionId {
 
 /// A named lexer mode that selects one DFA start state.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct StartCondition {
+pub(crate) struct Mode {
     name: String,
 }
 
-impl StartCondition {
-    /// Creates a start condition with its source-level name.
+impl Mode {
+    /// Creates a mode with its source-level name.
     pub(crate) fn new(name: impl Into<String>) -> Self {
         Self { name: name.into() }
     }
@@ -246,20 +140,20 @@ impl StartCondition {
 pub(crate) struct Rule {
     pattern: Expression,
     action: RuleAction,
-    start_conditions: Vec<StartConditionId>,
-    transition: ResolvedTransition,
+    modes: Vec<ModeId>,
+    mode_action: ResolvedModeAction,
 }
 
 #[derive(Clone, Copy)]
-pub(crate) enum ResolvedTransition {
+pub(crate) enum ResolvedModeAction {
     Stay,
-    Begin(StartConditionId),
-    Push(StartConditionId),
+    Begin(ModeId),
+    Push(ModeId),
     Pop,
 }
 
 impl Rule {
-    /// Parses a regex rule enabled in `start_conditions`.
+    /// Parses a regex rule enabled in `modes`.
     ///
     /// # Errors
     ///
@@ -267,29 +161,24 @@ impl Rule {
     fn parse(
         pattern: &str,
         action: RuleAction,
-        start_conditions: Vec<StartConditionId>,
-        transition: ResolvedTransition,
+        modes: Vec<ModeId>,
+        mode_action: ResolvedModeAction,
     ) -> Result<Self, ParseError> {
-        Ok(Self::new(
-            pattern.parse()?,
-            action,
-            start_conditions,
-            transition,
-        ))
+        Ok(Self::new(pattern.parse()?, action, modes, mode_action))
     }
 
-    /// Creates a rule enabled in `start_conditions`.
+    /// Creates a rule enabled in `modes`.
     pub(crate) fn new(
         pattern: Expression,
         action: RuleAction,
-        start_conditions: Vec<StartConditionId>,
-        transition: ResolvedTransition,
+        modes: Vec<ModeId>,
+        mode_action: ResolvedModeAction,
     ) -> Self {
         Self {
             pattern,
             action,
-            start_conditions,
-            transition,
+            modes,
+            mode_action,
         }
     }
 
@@ -304,46 +193,27 @@ impl Rule {
         &self.action
     }
 
-    pub(crate) fn transition(&self) -> ResolvedTransition {
-        self.transition
+    pub(crate) fn mode_action(&self) -> ResolvedModeAction {
+        self.mode_action
     }
 
-    /// Returns the start conditions in which this rule is enabled.
+    /// Returns the modes in which this rule is enabled.
     #[cfg(test)]
-    pub(crate) fn start_conditions(&self) -> &[StartConditionId] {
-        &self.start_conditions
-    }
-}
-
-/// The generated expression returned when a rule wins a match.
-pub(crate) enum RuleAction {
-    Emit(TokenStream),
-    Skip,
-}
-
-impl RuleAction {
-    /// Renders the generated action for the selected rule.
-    pub(crate) fn rendered(&self) -> TokenStream {
-        match self {
-            Self::Emit(tokens) => quote!(#tokens),
-            Self::Skip => quote!(Ok(None)),
-        }
+    pub(crate) fn modes(&self) -> &[ModeId] {
+        &self.modes
     }
 }
 
 /// All semantic input needed to construct and emit one lexer.
-pub(crate) struct Lexer {
+pub(crate) struct LexerDefinition {
     rules: Vec<Rule>,
-    start_conditions: Vec<StartCondition>,
+    modes: Vec<Mode>,
 }
 
-impl Lexer {
-    /// Creates a lexer from declaration-ordered rules and start conditions.
-    pub(crate) fn new(rules: Vec<Rule>, start_conditions: Vec<StartCondition>) -> Self {
-        Self {
-            rules,
-            start_conditions,
-        }
+impl LexerDefinition {
+    /// Creates a lexer from declaration-ordered rules and modes.
+    pub(crate) fn new(rules: Vec<Rule>, modes: Vec<Mode>) -> Self {
+        Self { rules, modes }
     }
 
     /// Returns the rule identified by `id`.
@@ -367,25 +237,25 @@ impl Lexer {
         &self.rules
     }
 
-    /// Returns the start condition identified by `id`.
+    /// Returns the mode identified by `id`.
     ///
     /// # Panics
     ///
-    /// Panics if `id` is not a start condition in this lexer.
+    /// Panics if `id` is not a mode in this lexer.
     #[cfg(test)]
-    pub(crate) fn start_condition(&self, id: StartConditionId) -> &StartCondition {
-        self.start_conditions.get(id.index()).unwrap_or_else(|| {
+    pub(crate) fn mode(&self, id: ModeId) -> &Mode {
+        self.modes.get(id.index()).unwrap_or_else(|| {
             panic!(
-                "start condition {} is outside a lexer with {} start conditions",
+                "mode {} is outside a lexer with {} modes",
                 id.index(),
-                self.start_conditions.len()
+                self.modes.len()
             )
         })
     }
 
-    /// Returns the start conditions in declaration order.
-    pub(crate) fn start_conditions(&self) -> &[StartCondition] {
-        &self.start_conditions
+    /// Returns the modes in declaration order.
+    pub(crate) fn modes(&self) -> &[Mode] {
+        &self.modes
     }
 
     /// Builds and minimizes the automaton for this lexer.
@@ -397,23 +267,18 @@ impl Lexer {
     ///
     /// # Panics
     ///
-    /// Panics if a rule enables a start condition that this lexer does not
-    /// define.
+    /// Panics if a rule enables a mode that this lexer does not define.
     fn compile_automaton(&self) -> Result<dfa::Dfa<ByteRange, RuleId>, CompileError> {
         let mut builder = nfa::Builder::new();
-        let starts: Vec<_> = self
-            .start_conditions
-            .iter()
-            .map(|_| builder.add_state())
-            .collect();
+        let starts: Vec<_> = self.modes.iter().map(|_| builder.add_state()).collect();
 
         for (index, rule) in self.rules.iter().enumerate() {
             let fragment = nfa::thompson::fragment(&rule.pattern, &Utf8, &mut builder);
-            for start_condition in &rule.start_conditions {
-                let start = starts.get(start_condition.index()).unwrap_or_else(|| {
+            for mode in &rule.modes {
+                let start = starts.get(mode.index()).unwrap_or_else(|| {
                     panic!(
-                        "rule {index} enables start condition {} outside a lexer with {} start conditions",
-                        start_condition.index(),
+                        "rule {index} enables mode {} outside a lexer with {} modes",
+                        mode.index(),
                         starts.len()
                     )
                 });
@@ -478,28 +343,28 @@ pub fn compile(specifications: Vec<RuleSpec>) -> Result<TokenStream, CompileErro
     compile_with_modes(Vec::new(), specifications)
 }
 
-/// Builds a lexer with named start conditions in addition to `INITIAL`.
+/// Builds a lexer with named modes in addition to `INITIAL`.
 ///
 /// # Errors
 ///
 /// Returns an error for invalid rules, duplicate or unknown modes, invalid
-/// stack transitions, regex syntax, or an automaton capacity limit.
+/// mode actions, regex syntax, or an automaton capacity limit.
 ///
 /// # Examples
 ///
 /// ```
-/// use runeweaver_codegen::{RuleSpec, Transition, compile_with_modes};
+/// use runeweaver_codegen::{ModeAction, RuleSpec, compile_with_modes};
 ///
 /// let generated = compile_with_modes(
 ///     vec!["String".into()],
 ///     vec![
-///         RuleSpec::skip(r#"\""#).transition(Transition::Push("String".into())),
+///         RuleSpec::skip(r#"\""#).mode_action(ModeAction::Push("String".into())),
 ///         RuleSpec::skip(r#"\""#)
 ///             .in_modes(vec!["String".into()])
-///             .transition(Transition::Pop),
+///             .mode_action(ModeAction::Pop),
 ///     ],
 /// )?;
-/// assert!(generated.to_string().contains("Transition :: Push"));
+/// assert!(generated.to_string().contains("ModeAction :: Push"));
 /// # Ok::<(), runeweaver_codegen::CompileError>(())
 /// ```
 pub fn compile_with_modes(
@@ -519,23 +384,25 @@ pub fn compile_with_modes_at(
     modes: Vec<String>,
     specifications: Vec<RuleSpec>,
 ) -> Result<TokenStream, CompileError> {
-    let mut conditions = vec![StartCondition::new("INITIAL")];
+    let mut declared_modes = vec![Mode::new("INITIAL")];
     for mode in modes {
-        if mode == "INITIAL" || mode == "Initial" || conditions.iter().any(|item| item.name == mode)
+        if mode == "INITIAL"
+            || mode == "Initial"
+            || declared_modes.iter().any(|item| item.name == mode)
         {
             return Err(CompileError {
                 message: format!("duplicate or reserved lexer mode `{mode}`"),
                 rule_index: None,
             });
         }
-        conditions.push(StartCondition::new(mode));
+        declared_modes.push(Mode::new(mode));
     }
-    let resolve = |name: &str| -> Result<StartConditionId, CompileError> {
+    let resolve = |name: &str| -> Result<ModeId, CompileError> {
         let name = if name == "Initial" { "INITIAL" } else { name };
-        conditions
+        declared_modes
             .iter()
-            .position(|condition| condition.name == name)
-            .map(StartConditionId::new)
+            .position(|mode| mode.name == name)
+            .map(ModeId::new)
             .ok_or_else(|| CompileError {
                 message: format!("unknown lexer mode `{name}`"),
                 rule_index: None,
@@ -558,25 +425,25 @@ pub fn compile_with_modes_at(
                     rule_index: Some(rule_index),
                 });
             }
-            let transition = match specification.transition {
-                Transition::Stay => ResolvedTransition::Stay,
-                Transition::Begin(name) => ResolvedTransition::Begin(resolve_rule(&name)?),
-                Transition::Push(name) => ResolvedTransition::Push(resolve_rule(&name)?),
-                Transition::Pop => {
+            let mode_action = match specification.mode_action {
+                ModeAction::Stay => ResolvedModeAction::Stay,
+                ModeAction::Begin(name) => ResolvedModeAction::Begin(resolve_rule(&name)?),
+                ModeAction::Push(name) => ResolvedModeAction::Push(resolve_rule(&name)?),
+                ModeAction::Pop => {
                     if enabled.iter().any(|id| id.index() == 0) {
                         return Err(CompileError {
                             message: "a `pop` rule cannot be enabled in INITIAL".into(),
                             rule_index: Some(rule_index),
                         });
                     }
-                    ResolvedTransition::Pop
+                    ResolvedModeAction::Pop
                 }
             };
             Rule::parse(
                 &specification.pattern,
                 specification.action,
                 enabled,
-                transition,
+                mode_action,
             )
             .map_err(|error| CompileError::for_rule(rule_index, error))
         })
@@ -598,7 +465,7 @@ pub fn compile_with_modes_at(
             rule_index: None,
         });
     }
-    Lexer::new(rules, conditions).emit(&runtime)
+    LexerDefinition::new(rules, declared_modes).emit(&runtime)
 }
 
 #[cfg(test)]
@@ -607,15 +474,15 @@ mod tests {
     use quote::quote;
     use std::str::FromStr;
 
-    fn example() -> Lexer {
-        Lexer::new(
+    fn example() -> LexerDefinition {
+        LexerDefinition::new(
             vec![Rule::new(
                 Expression::from_str("[a-z]+").expect("the test pattern is valid"),
                 RuleAction::Emit(quote!(Token::Identifier)),
-                vec![StartConditionId::new(0)],
-                ResolvedTransition::Stay,
+                vec![ModeId::new(0)],
+                ResolvedModeAction::Stay,
             )],
-            vec![StartCondition::new("INITIAL")],
+            vec![Mode::new("INITIAL")],
         )
     }
 
@@ -629,19 +496,16 @@ mod tests {
             &Expression::from_str("[a-z]+").expect("the test pattern is valid")
         );
         assert_eq!(rule.action().rendered().to_string(), "Token :: Identifier");
-        assert_eq!(rule.start_conditions(), &[StartConditionId::new(0)]);
+        assert_eq!(rule.modes(), &[ModeId::new(0)]);
         assert_eq!(lexer.rules().len(), 1);
     }
 
     #[test]
-    fn lexer_keeps_named_start_conditions_by_identifier() {
+    fn lexer_keeps_named_modes_by_identifier() {
         let lexer = example();
 
-        assert_eq!(
-            lexer.start_condition(StartConditionId::new(0)).name(),
-            "INITIAL"
-        );
-        assert_eq!(lexer.start_conditions().len(), 1);
+        assert_eq!(lexer.mode(ModeId::new(0)).name(), "INITIAL");
+        assert_eq!(lexer.modes().len(), 1);
     }
 
     #[test]
@@ -651,9 +515,9 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "start condition 1 is outside a lexer with 1 start conditions")]
-    fn reading_a_start_condition_outside_the_lexer_panics() {
-        example().start_condition(StartConditionId::new(1));
+    #[should_panic(expected = "mode 1 is outside a lexer with 1 modes")]
+    fn reading_a_mode_outside_the_lexer_panics() {
+        example().mode(ModeId::new(1));
     }
 
     #[test]

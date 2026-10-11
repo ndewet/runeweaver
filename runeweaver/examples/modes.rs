@@ -1,4 +1,4 @@
-//! Shows start conditions and nested block comments.
+//! Shows lexer modes and nested block comments.
 
 use runeweaver::{Lexer, ScanError};
 
@@ -23,10 +23,10 @@ enum Token {
 
 fn main() {
     let input = "word @ RUN /* outer /* inner */ outer */ ; tail";
-    let scanned: Vec<_> = Token::scanner(input).collect();
+    let scanned: Vec<_> = Token::scan(input).collect();
     println!("{scanned:#?}");
 
-    let unterminated: Vec<_> = Token::scanner("word /* open").collect();
+    let unterminated: Vec<_> = Token::scan("word /* open").collect();
     assert!(matches!(
         unterminated.last(),
         Some(Err(ScanError::UnterminatedMode {

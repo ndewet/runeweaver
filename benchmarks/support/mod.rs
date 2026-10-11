@@ -1,6 +1,6 @@
 pub mod definition;
 pub mod generation;
-pub mod scanner;
+pub mod scan;
 
 macro_rules! token_definition {
     (
