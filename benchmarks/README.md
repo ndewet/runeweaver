@@ -47,20 +47,20 @@ token_definition! {
 The macro creates the derived token type and its codegen input. Add a matching
 benchmark target to `Cargo.toml`. Add a wrapper in `benches/` that includes
 `case_benchmark.rs`. The same form supports modes, payload fields, callbacks,
-and transitions. The corresponding files in `cases/` show each feature in
+and mode actions. The corresponding files in `cases/` show each feature in
 isolation.
 
-For a scanner benchmark, add a source file in `sources/`. Then register the
-token type and the source with the shared scanner runner:
+For a scan benchmark, add a source file in `sources/`. Then register the token
+type and source with the shared `&str` runner:
 
 ```rust
 pub const SOURCE: &str = include_str!("../sources/words.txt");
 
-scanner::benchmarks::<words::Token>(criterion, "words", words::SOURCE);
+scan::benchmark::<words::Token>(criterion, "words", words::SOURCE);
 ```
 
-The runner expands small source files to at least 512 KiB. It automatically
-measures slices, readers, and both lexeme-retaining forms.
+The runner expands small source files to at least 512 KiB and measures the
+borrowed string API.
 
 Keep input creation and other setup outside the timed operation. Use
 `iter_batched` when each iteration needs a new input value.

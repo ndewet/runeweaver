@@ -21,6 +21,6 @@ enum Token {
 
 fn main() {
     let input = "true 127.0.0.1 😀😀 value,other";
-    let scanned: Vec<_> = Token::scanner(input).collect();
+    let scanned: Vec<_> = Token::scan(input).collect();
     println!("{scanned:#?}");
 }

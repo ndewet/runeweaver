@@ -24,16 +24,16 @@ fn reject_question(text: &str) -> Result<String, String> {
 }
 
 fn main() {
-    let scanned: Vec<_> = Token::scanner("42 !hello").collect();
+    let scanned: Vec<_> = Token::scan("42 !hello").collect();
     println!("{scanned:#?}");
 
-    let failed: Vec<_> = Token::scanner("18446744073709551616 7").collect();
+    let failed: Vec<_> = Token::scan("18446744073709551616 7").collect();
     assert!(matches!(
         failed.first(),
         Some(Err(ScanError::InvalidPayload { span, .. })) if span == &Span::new(0, 20)
     ));
 
-    let rejected: Vec<_> = Token::scanner("?why").collect();
+    let rejected: Vec<_> = Token::scan("?why").collect();
     assert!(matches!(
         rejected.first(),
         Some(Err(ScanError::InvalidPayload { .. }))

@@ -55,7 +55,7 @@ name = "small"
 harness = false
 
 [[bench]]
-name = "transitions"
+name = "mode_actions"
 harness = false
 
 [[bench]]

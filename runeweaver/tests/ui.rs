@@ -28,11 +28,6 @@ const CASES: &[Case] = &[
         message: "error: lexer token variants need one `#[token(\"pattern\")]` attribute",
         location: "src/bin/missing_pattern.rs:5:5",
     },
-    Case {
-        name: "zero_token_limit",
-        message: "error: `max_token_bytes` must be greater than zero",
-        location: "src/bin/zero_token_limit.rs:4:27",
-    },
 ];
 
 fn make_test_project(root: &Path) -> Result<(), Box<dyn Error>> {
@@ -132,7 +127,7 @@ enum Token {
 }
 
 fn main() {
-    assert_eq!(Token::scanner("word").count(), 1);
+    assert_eq!(Token::scan("word").count(), 1);
 }
 "#;
 

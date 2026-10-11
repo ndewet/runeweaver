@@ -1,6 +1,6 @@
 use crate::support::token_definition;
 
-pub const SOURCE: &str = include_str!("../sources/transitions.txt");
+pub const SOURCE: &str = include_str!("../sources/mode_actions.txt");
 
 token_definition! {
     #[lexer(mode = Directive)]

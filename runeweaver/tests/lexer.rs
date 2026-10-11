@@ -2,12 +2,16 @@
 
 #![deny(dead_code)]
 
-use runeweaver::{
-    DEFAULT_MAX_TOKEN_BYTES, Lexer, Reader, ScanError, Slice, Source, Span, Spanned, SpannedLexeme,
-};
+use runeweaver::{Lexer, ScanError, Span, Spanned};
 use std::convert::Infallible;
-use std::io::Cursor;
 use std::str::FromStr;
+
+fn first<T: Lexer>(input: &str) -> Option<(T, usize)> {
+    T::scan(input)
+        .next()?
+        .ok()
+        .map(|spanned| (spanned.token, spanned.span.end))
+}
 
 #[derive(Debug, PartialEq, Lexer)]
 enum Token {
@@ -19,9 +23,9 @@ enum Token {
 
 #[test]
 fn derived_lexer_returns_the_longest_prefix() {
-    assert_eq!(Token::scan("aaab"), Some((Token::As, 3)));
-    assert_eq!(Token::scan("b"), Some((Token::B, 1)));
-    assert_eq!(Token::scan("c"), None);
+    assert_eq!(first::<Token>("aaab"), Some((Token::As, 3)));
+    assert_eq!(first::<Token>("b"), Some((Token::B, 1)));
+    assert_eq!(first::<Token>("c"), None);
 }
 
 #[allow(dead_code)]
@@ -35,7 +39,7 @@ enum Priority {
 
 #[test]
 fn derived_lexer_breaks_equal_length_ties_by_rule_order() {
-    assert_eq!(Priority::scan("a"), Some((Priority::First, 1)));
+    assert_eq!(first::<Priority>("a"), Some((Priority::First, 1)));
 }
 
 #[derive(Debug, PartialEq, Lexer)]
@@ -46,7 +50,7 @@ enum Unicode {
 
 #[test]
 fn derived_lexer_counts_utf8_bytes() {
-    assert_eq!(Unicode::scan("éé!"), Some((Unicode::EAcute, 4)));
+    assert_eq!(first::<Unicode>("éé!"), Some((Unicode::EAcute, 4)));
 }
 
 #[derive(Debug, PartialEq, Lexer)]
@@ -72,7 +76,7 @@ enum WithNestedComments {
 #[test]
 fn derived_lexer_skips_arbitrarily_nested_block_comments() {
     let input = "one /* outer /* nested */ still outer */ two";
-    let scanned: Vec<_> = WithNestedComments::scanner(input).collect();
+    let scanned: Vec<_> = WithNestedComments::scan(input).collect();
 
     assert_eq!(
         scanned,
@@ -92,7 +96,7 @@ fn derived_lexer_skips_arbitrarily_nested_block_comments() {
 #[test]
 fn derived_lexer_reports_an_unterminated_nested_comment() {
     let input = "one /* outer /* nested */";
-    let scanned: Vec<_> = WithNestedComments::scanner(input).collect();
+    let scanned: Vec<_> = WithNestedComments::scan(input).collect();
 
     assert_eq!(
         scanned,
@@ -124,7 +128,7 @@ enum ModeTokens {
 
 #[test]
 fn derived_lexer_only_enables_tokens_in_their_declared_mode() {
-    let scanned: Vec<_> = ModeTokens::scanner("name \"text\" tail")
+    let scanned: Vec<_> = ModeTokens::scan("name \"text\" tail")
         .map(|item| item.map(|spanned| spanned.token))
         .collect();
     assert_eq!(
@@ -148,14 +152,14 @@ fn derived_lexer_only_enables_tokens_in_their_declared_mode() {
 #[test]
 fn derived_lexer_skips_whitespace_and_comments() {
     assert_eq!(
-        WithTrivia::scan(" \t// note\nname"),
+        first::<WithTrivia>(" \t// note\nname"),
         Some((WithTrivia::Identifier, 14))
     );
 }
 
 #[test]
-fn scanner_keeps_spans_and_recovers_after_invalid_input() {
-    let scanned: Vec<_> = WithTrivia::scanner("one @ two").collect();
+fn scan_keeps_spans_and_recovers_after_invalid_input() {
+    let scanned: Vec<_> = WithTrivia::scan("one @ two").collect();
 
     assert_eq!(
         scanned,
@@ -208,7 +212,7 @@ fn reject_hash(_: &str) -> Result<String, &'static str> {
 
 #[test]
 fn derived_lexer_parses_owned_payloads() {
-    let scanned: Vec<_> = Value::scanner("42 name !hello").collect();
+    let scanned: Vec<_> = Value::scan("42 name !hello").collect();
 
     assert_eq!(
         scanned,
@@ -236,8 +240,8 @@ fn derived_lexer_parses_owned_payloads() {
 }
 
 #[test]
-fn scanner_reports_payload_conversion_errors_and_recovers() {
-    let scanned: Vec<_> = Value::scanner("18446744073709551616 7").collect();
+fn scan_reports_payload_conversion_errors_and_recovers() {
+    let scanned: Vec<_> = Value::scan("18446744073709551616 7").collect();
 
     assert!(matches!(
         scanned.first(),
@@ -253,8 +257,8 @@ fn scanner_reports_payload_conversion_errors_and_recovers() {
 }
 
 #[test]
-fn scanner_reports_explicit_converter_errors_and_recovers() {
-    let scanned: Vec<_> = Value::scanner("#no 7").collect();
+fn scan_reports_explicit_converter_errors_and_recovers() {
+    let scanned: Vec<_> = Value::scan("#no 7").collect();
 
     assert_eq!(
         scanned,
@@ -289,8 +293,8 @@ fn reject_mode_payload(_: &str) -> Result<String, &'static str> {
 }
 
 #[test]
-fn a_failed_payload_still_applies_its_mode_transition() {
-    let scanned: Vec<_> = FailedModePayload::scanner("[xa").collect();
+fn a_failed_payload_still_applies_its_mode_action() {
+    let scanned: Vec<_> = FailedModePayload::scan("[xa").collect();
 
     assert_eq!(
         scanned,
@@ -317,9 +321,15 @@ enum Repetition {
 
 #[test]
 fn derived_lexer_handles_open_ended_and_nullable_repetition() {
-    assert_eq!(Repetition::scan("aaab"), Some((Repetition::OpenEnded, 4)));
-    assert_eq!(Repetition::scan("b"), Some((Repetition::NullableLoop, 1)));
-    assert_eq!(Repetition::scan("aaa"), None);
+    assert_eq!(
+        first::<Repetition>("aaab"),
+        Some((Repetition::OpenEnded, 4))
+    );
+    assert_eq!(
+        first::<Repetition>("b"),
+        Some((Repetition::NullableLoop, 1))
+    );
+    assert_eq!(first::<Repetition>("aaa"), None);
 }
 
 #[derive(Debug, PartialEq, Lexer)]
@@ -332,7 +342,7 @@ enum UnicodeBoundaries {
 
 #[test]
 fn derived_lexer_matches_utf8_boundaries_and_keeps_byte_spans() {
-    let scanned: Vec<_> = UnicodeBoundaries::scanner("\u{7f}\u{80}é€𐐷@").collect();
+    let scanned: Vec<_> = UnicodeBoundaries::scan("\u{7f}\u{80}é€𐐷@").collect();
 
     assert_eq!(
         scanned,
@@ -366,7 +376,7 @@ enum NegatedClass {
 
 #[test]
 fn derived_lexer_matches_negated_classes_including_newlines_and_unicode() {
-    let scanned: Vec<_> = NegatedClass::scanner("a\né").collect();
+    let scanned: Vec<_> = NegatedClass::scan("a\né").collect();
 
     assert_eq!(
         scanned,
@@ -436,21 +446,21 @@ enum RustToken {
 }
 
 fn rust_tokens(input: &str) -> Vec<Spanned<RustToken>> {
-    RustToken::scanner(input)
+    RustToken::scan(input)
         .map(|result| result.expect("the Rust-like input is recognized"))
         .collect()
 }
 
 #[test]
 fn rust_like_lexer_recognizes_common_tokens() {
-    assert_eq!(RustToken::scan("fn"), Some((RustToken::Fn, 2)));
+    assert_eq!(first::<RustToken>("fn"), Some((RustToken::Fn, 2)));
     assert_eq!(
-        RustToken::scan("fn_name"),
+        first::<RustToken>("fn_name"),
         Some((RustToken::Identifier, 7)),
         "a keyword must not steal an identifier prefix"
     );
     assert_eq!(
-        RustToken::scan(r#""say: \"é\"""#),
+        first::<RustToken>(r#""say: \"é\"""#),
         Some((RustToken::String, 13)),
         "escaped quotes and multi-byte characters stay inside one string literal"
     );
@@ -598,312 +608,33 @@ fn failing(_: &str) -> Result<String, &'static str> {
 #[test]
 fn a_converter_returns_a_payload_or_a_result() {
     assert_eq!(
-        Converters::scanner("!hi").next(),
+        Converters::scan("!hi").next(),
         Some(Ok(Spanned {
             token: Converters::Direct("HI".to_owned()),
             span: Span::new(0, 3),
         }))
     );
     assert_eq!(
-        Converters::scanner("42").next(),
+        Converters::scan("42").next(),
         Some(Ok(Spanned {
             token: Converters::Checked(42),
             span: Span::new(0, 2),
         }))
     );
     assert_eq!(
-        Converters::scanner("999").next(),
+        Converters::scan("999").next(),
         Some(Err(ScanError::InvalidPayload {
             span: Span::new(0, 3),
             message: "999 is not a byte value".to_owned(),
         }))
     );
     assert_eq!(
-        Converters::scanner("?why").next(),
+        Converters::scan("?why").next(),
         Some(Err(ScanError::InvalidPayload {
             span: Span::new(0, 4),
             message: "a question is not a value".to_owned(),
         }))
     );
-}
-
-#[derive(Debug, PartialEq, Lexer)]
-enum Streaming {
-    #[token("a")]
-    A,
-    #[token("ab+c")]
-    Abc,
-    #[token("b+")]
-    Bs,
-    #[token("x")]
-    X,
-    #[token("Ã©")]
-    EAcute,
-}
-
-#[derive(Debug, PartialEq, Lexer)]
-#[lexer(max_token_bytes = 3)]
-#[lexer(skip = " +")]
-enum Limited {
-    #[token("[a-z]+")]
-    Word,
-}
-
-struct OneByteAtATime<'input> {
-    remaining: &'input [u8],
-}
-
-impl Source for OneByteAtATime<'_> {
-    type Error = Infallible;
-
-    fn read(&mut self, buffer: &mut [u8]) -> Result<usize, Self::Error> {
-        let Some((&byte, remaining)) = self.remaining.split_first() else {
-            return Ok(0);
-        };
-        buffer[0] = byte;
-        self.remaining = remaining;
-        Ok(1)
-    }
-}
-
-#[test]
-fn generated_lexers_use_the_default_token_limit() {
-    assert_eq!(
-        <Streaming as Lexer>::max_token_bytes(),
-        DEFAULT_MAX_TOKEN_BYTES
-    );
-}
-
-#[test]
-fn a_lexer_accepts_a_token_at_its_configured_limit() {
-    let scanned: Vec<_> = Limited::scanner("abc!").collect();
-
-    assert_eq!(
-        scanned,
-        vec![
-            Ok(Spanned {
-                token: Limited::Word,
-                span: Span::new(0, 3),
-            }),
-            Err(ScanError::Unrecognized {
-                span: Span::new(3, 4),
-            }),
-        ]
-    );
-}
-
-#[test]
-fn a_lexer_stops_when_a_token_exceeds_its_configured_limit() {
-    let mut scanner = Limited::scanner("a abcd");
-
-    assert_eq!(
-        scanner.next(),
-        Some(Ok(Spanned {
-            token: Limited::Word,
-            span: Span::new(0, 1),
-        }))
-    );
-    assert_eq!(
-        scanner.next(),
-        Some(Err(ScanError::TokenTooLong {
-            span: Span::new(2, 6),
-            limit: 3,
-        }))
-    );
-    assert_eq!(scanner.next(), None);
-}
-
-#[test]
-fn the_token_limit_applies_to_skipped_rules_and_chunked_sources() {
-    let source = OneByteAtATime { remaining: b"    " };
-    let scanned: Vec<_> = Limited::scanner_from(source).collect();
-
-    assert_eq!(
-        scanned,
-        vec![Err(ScanError::TokenTooLong {
-            span: Span::new(0, 4),
-            limit: 3,
-        })]
-    );
-}
-
-#[test]
-fn an_over_limit_scanner_returns_its_candidate_and_lookahead() {
-    let source = Reader::new(Cursor::new(b"abcd!"));
-    let mut scanner = Limited::scanner_from(source);
-    assert!(matches!(
-        scanner.next(),
-        Some(Err(ScanError::TokenTooLong { .. }))
-    ));
-
-    let mut remainder = scanner.into_source();
-    let mut bytes = [0; 5];
-    assert_eq!(
-        Source::read(&mut remainder, &mut bytes).expect("the in-memory reader does not fail"),
-        bytes.len()
-    );
-    assert_eq!(&bytes, b"abcd!");
-}
-
-#[test]
-fn scanner_streams_across_chunks_and_replays_longest_match_lookahead() {
-    let input = "abbbxÃ©";
-    let source = OneByteAtATime {
-        remaining: input.as_bytes(),
-    };
-    let scanned: Vec<_> = Streaming::scanner_from(source).collect();
-
-    assert_eq!(
-        scanned,
-        vec![
-            Ok(Spanned {
-                token: Streaming::A,
-                span: Span::new(0, 1),
-            }),
-            Ok(Spanned {
-                token: Streaming::Bs,
-                span: Span::new(1, 4),
-            }),
-            Ok(Spanned {
-                token: Streaming::X,
-                span: Span::new(4, 5),
-            }),
-            Ok(Spanned {
-                token: Streaming::EAcute,
-                span: Span::new(5, input.len() as u64),
-            }),
-        ]
-    );
-}
-
-#[test]
-fn scanner_accepts_standard_readers_through_the_reader_adapter() {
-    let source = Reader::new(Cursor::new(b"abbbcx"));
-    let scanned: Vec<_> = Streaming::scanner_from(source)
-        .map(|item| item.expect("the in-memory reader does not fail"))
-        .collect();
-
-    assert_eq!(
-        scanned,
-        vec![
-            Spanned {
-                token: Streaming::Abc,
-                span: Span::new(0, 5),
-            },
-            Spanned {
-                token: Streaming::X,
-                span: Span::new(5, 6),
-            },
-        ]
-    );
-}
-
-#[test]
-fn a_lexeme_scanner_owns_matched_text_from_a_stream() {
-    let source = OneByteAtATime {
-        remaining: b"abbbcx",
-    };
-    let scanned: Vec<_> = Streaming::scanner_from(source)
-        .with_lexemes()
-        .map(|item| item.expect("the byte stream is valid"))
-        .collect();
-
-    assert_eq!(
-        scanned,
-        vec![
-            SpannedLexeme {
-                token: Streaming::Abc,
-                span: Span::new(0, 5),
-                lexeme: "abbbc".to_owned(),
-            },
-            SpannedLexeme {
-                token: Streaming::X,
-                span: Span::new(5, 6),
-                lexeme: "x".to_owned(),
-            },
-        ]
-    );
-}
-
-#[test]
-fn a_lexeme_scanner_skips_trivia_and_preserves_recovery() {
-    let mut scanner = RustToken::scanner("fn  @name").with_lexemes();
-
-    assert_eq!(
-        scanner.next(),
-        Some(Ok(SpannedLexeme {
-            token: RustToken::Fn,
-            span: Span::new(0, 2),
-            lexeme: "fn".to_owned(),
-        }))
-    );
-    assert_eq!(
-        scanner.next(),
-        Some(Err(ScanError::Unrecognized {
-            span: Span::new(4, 5),
-        }))
-    );
-    assert_eq!(
-        scanner.next(),
-        Some(Ok(SpannedLexeme {
-            token: RustToken::Identifier,
-            span: Span::new(5, 9),
-            lexeme: "name".to_owned(),
-        }))
-    );
-    assert_eq!(scanner.position(), 9);
-    assert_eq!(scanner.next(), None);
-}
-
-#[test]
-fn scanner_reports_invalid_utf8_and_recovers_at_the_next_byte() {
-    let source = Slice::new(b"\xffx");
-    let scanned: Vec<_> = Streaming::scanner_from(source).collect();
-
-    assert_eq!(
-        scanned,
-        vec![
-            Err(ScanError::InvalidUtf8 {
-                span: Span::new(0, 1),
-            }),
-            Ok(Spanned {
-                token: Streaming::X,
-                span: Span::new(1, 2),
-            }),
-        ]
-    );
-}
-
-#[derive(Debug, PartialEq, Eq)]
-struct BrokenSource {
-    sent: bool,
-}
-
-impl Source for BrokenSource {
-    type Error = &'static str;
-
-    fn read(&mut self, buffer: &mut [u8]) -> Result<usize, Self::Error> {
-        if self.sent {
-            return Err("disconnected");
-        }
-        buffer[..3].copy_from_slice(b"bbb");
-        self.sent = true;
-        Ok(3)
-    }
-}
-
-#[test]
-fn scanner_reports_source_errors_without_accepting_an_ambiguous_prefix() {
-    let mut scanner = Streaming::scanner_from(BrokenSource { sent: false });
-
-    assert_eq!(
-        scanner.next(),
-        Some(Err(ScanError::Source {
-            offset: 3,
-            error: "disconnected",
-        }))
-    );
-    assert_eq!(scanner.next(), None);
 }
 
 #[test]
@@ -912,15 +643,8 @@ fn scan_errors_expose_their_location_without_matching_variants() {
         span: Span::new(3, 7),
         message: "invalid value".to_owned(),
     };
-    assert_eq!(ranged.span(), Some(Span::new(3, 7)));
+    assert_eq!(ranged.span(), Span::new(3, 7));
     assert_eq!(ranged.offset(), 3);
-
-    let source = ScanError::Source {
-        offset: 11,
-        error: "disconnected",
-    };
-    assert_eq!(source.span(), None);
-    assert_eq!(source.offset(), 11);
 }
 
 #[test]
@@ -947,60 +671,4 @@ fn a_failed_spanned_transformation_returns_its_error() {
     let result = token.try_map(str::parse::<u8>);
 
     assert!(result.is_err());
-}
-
-#[test]
-fn a_scan_error_can_transform_its_source_error() {
-    let error = ScanError::Source {
-        offset: 3,
-        error: "disconnected",
-    };
-
-    assert_eq!(
-        error.map_source_error(str::to_owned),
-        ScanError::Source {
-            offset: 3,
-            error: "disconnected".to_owned(),
-        }
-    );
-}
-
-#[test]
-fn source_error_mapping_preserves_non_source_variants() {
-    let error: ScanError<&str> = ScanError::TokenTooLong {
-        span: Span::new(2, 6),
-        limit: 3,
-    };
-
-    assert_eq!(
-        error.map_source_error(str::to_owned),
-        ScanError::TokenTooLong {
-            span: Span::new(2, 6),
-            limit: 3,
-        }
-    );
-}
-
-#[test]
-fn scanner_returns_lookahead_before_the_original_source() {
-    let mut scanner = Streaming::scanner_from(Reader::new(Cursor::new(b"abbbx")));
-    let first = scanner
-        .next()
-        .expect("the input has a token")
-        .expect("the in-memory reader does not fail");
-    assert_eq!(
-        first,
-        Spanned {
-            token: Streaming::A,
-            span: Span::new(0, 1),
-        }
-    );
-
-    let mut remainder = scanner.into_source();
-    let mut bytes = [0; 4];
-    assert_eq!(
-        Source::read(&mut remainder, &mut bytes).expect("the in-memory reader does not fail"),
-        4
-    );
-    assert_eq!(&bytes, b"bbbx");
 }

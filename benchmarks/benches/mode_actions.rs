@@ -1,4 +1,4 @@
-#[path = "../cases/transitions.rs"]
+#[path = "../cases/mode_actions.rs"]
 mod case;
 #[path = "../support/mod.rs"]
 mod support;

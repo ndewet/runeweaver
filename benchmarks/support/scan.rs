@@ -1,0 +1,33 @@
+use criterion::{Criterion, SamplingMode, Throughput};
+use runeweaver::Lexer;
+use std::hint::black_box;
+
+const MINIMUM_INPUT_BYTES: usize = 512 * 1024;
+
+fn input(source: &str) -> String {
+    assert!(
+        !source.is_empty(),
+        "a benchmark source file cannot be empty"
+    );
+    let repetitions = MINIMUM_INPUT_BYTES.div_ceil(source.len());
+    source.repeat(repetitions)
+}
+
+fn scan<T: Lexer>(input: &str) -> usize {
+    T::scan(black_box(input))
+        .try_fold(0usize, |count, result| result.map(|_| count + 1))
+        .expect("the benchmark source is valid for its token definition")
+}
+
+pub fn benchmark<T: Lexer>(criterion: &mut Criterion, name: &str, source: &str) {
+    let input = input(source);
+    let mut group = criterion.benchmark_group(format!("scanning/{name}"));
+    group.sampling_mode(SamplingMode::Flat);
+    group.throughput(Throughput::Bytes(input.len() as u64));
+
+    group.bench_function("str", |bencher| {
+        bencher.iter(|| black_box(scan::<T>(input.as_str())));
+    });
+
+    group.finish();
+}
