@@ -13,7 +13,7 @@ repository = "https://github.com/ndewet/runeweaver"
 [workspace.lints.rust]
 missing_docs = "warn"
 unreachable_pub = "warn"
-unsafe_code = "forbid"
+unsafe_code = "deny"
 
 # `clippy::panic_in_result_fn` stays off. A function that gives a `Result` for
 # a fault in the input still panics for a defect in runeweaver. The lint

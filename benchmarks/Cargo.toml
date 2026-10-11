@@ -63,4 +63,4 @@ name = "xml"
 harness = false
 
 [lints.rust]
-unsafe_code = "forbid"
+unsafe_code = "deny"

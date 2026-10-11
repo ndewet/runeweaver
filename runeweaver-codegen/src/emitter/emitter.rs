@@ -65,6 +65,7 @@ pub(crate) fn emit(matcher: &Matcher, lexer: &Lexer, runtime: &TokenStream) -> T
     quote! {
         #selector
 
+        #[allow(unsafe_code)]
         fn __runeweaver_scan_one(
             input: &str,
             start_condition: usize,
