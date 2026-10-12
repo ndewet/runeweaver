@@ -115,7 +115,7 @@ pub struct Scanner<'input, T, Extras = ()> {
 ///
 /// This alias preserves the original name for [`Scanner`]. New code can name
 /// the stateful object directly.
-pub type Scan<'input, T> = Scanner<'input, T, <T as crate::lexer::Automaton>::Extras>;
+pub type Scan<'input, T> = Scanner<'input, T, <T as crate::lexer::Automaton<'input>>::Extras>;
 
 #[derive(Clone, Copy)]
 struct ModeFrame {
@@ -123,7 +123,7 @@ struct ModeFrame {
     opened_at: usize,
 }
 
-impl<'input, T: crate::lexer::Automaton> Scanner<'input, T, T::Extras>
+impl<'input, T: crate::lexer::Automaton<'input>> Scanner<'input, T, T::Extras>
 where
     T::Extras: Default,
 {
@@ -377,7 +377,7 @@ pub struct SpannedScan<'input, T, Extras = ()> {
     scan: Scanner<'input, T, Extras>,
 }
 
-impl<T: Lexer> Scanner<'_, T, T::Extras> {
+impl<'input, T: Lexer<'input>> Scanner<'input, T, T::Extras> {
     #[inline(always)]
     fn apply_mode_action(&mut self, action: ModeAction, start: usize) {
         match action {
@@ -440,7 +440,7 @@ impl<T: Lexer> Scanner<'_, T, T::Extras> {
     }
 }
 
-impl<T: Lexer> Iterator for Scanner<'_, T, T::Extras> {
+impl<'input, T: Lexer<'input>> Iterator for Scanner<'input, T, T::Extras> {
     type Item = Result<T, ScanError>;
 
     #[inline(always)]
@@ -452,7 +452,7 @@ impl<T: Lexer> Iterator for Scanner<'_, T, T::Extras> {
     }
 }
 
-impl<T: Lexer> Iterator for SpannedScan<'_, T, T::Extras> {
+impl<'input, T: Lexer<'input>> Iterator for SpannedScan<'input, T, T::Extras> {
     type Item = Result<Spanned<T>, ScanError>;
 
     #[inline(always)]

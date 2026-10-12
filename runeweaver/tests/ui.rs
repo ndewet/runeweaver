@@ -19,11 +19,6 @@ const CASES: &[Case] = &[
         location: "src/bin/duplicate_extras.rs:5:1",
     },
     Case {
-        name: "borrowed_payload",
-        message: "error: token payloads must be owned",
-        location: "src/bin/borrowed_payload.rs:6:10",
-    },
-    Case {
         name: "duplicate_converter",
         message: "error: `with` can be specified only once",
         location: "src/bin/duplicate_converter.rs:9:34",
