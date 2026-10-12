@@ -55,6 +55,33 @@ runeweaver = {{ path = "{dependency_path}" }}
             root.join(format!("src/bin/{}.rs", case.name)),
         )?;
     }
+    fs::copy(
+        source_dir.join("tests/ui/empty_lexer.rs"),
+        root.join("src/bin/empty_lexer.rs"),
+    )?;
+    Ok(())
+}
+
+#[test]
+fn an_empty_lexer_compiles_when_warnings_are_denied() -> Result<(), Box<dyn Error>> {
+    let unique = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos();
+    let root =
+        std::env::temp_dir().join(format!("runeweaver-empty-{}-{unique}", std::process::id()));
+    make_test_project(&root)?;
+
+    let output = Command::new(env!("CARGO"))
+        .args(["check", "--quiet", "--offline", "--bin", "empty_lexer"])
+        .current_dir(&root)
+        .env("CARGO_TARGET_DIR", root.join("target"))
+        .env("CARGO_TERM_COLOR", "never")
+        .output()?;
+
+    assert!(
+        output.status.success(),
+        "the empty lexer did not compile:\n{}",
+        String::from_utf8(output.stderr)?,
+    );
+    fs::remove_dir_all(root)?;
     Ok(())
 }
 

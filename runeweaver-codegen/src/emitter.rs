@@ -103,7 +103,28 @@ pub(crate) fn emit(
     let actions = action_arms(lexer, &lexer_runtime, &payload_runtime);
     // Keep actions directly in the scanner so LLVM can specialize each lexer. The
     // dispatch function also supports the generated automaton's test interface.
-    let direct_actions = actions.iter();
+    let direct_execution = if actions.is_empty() {
+        quote! {
+            unreachable!("a lexer without rules cannot select a rule")
+        }
+    } else {
+        let direct_actions = actions.iter();
+        quote! {
+            let text = unsafe { input.get_unchecked(start..end) };
+            let result = match rule {
+                #(#direct_actions)*
+                _ => unreachable!("generated lexer selected an unknown rule"),
+            };
+            let (result, mode_action) = result;
+            return Some(match result {
+                Ok(token) => Ok((token, mode_action)),
+                Err(error) => Err((
+                    #runtime::ScanError::invalid_payload(*span, error),
+                    mode_action,
+                )),
+            });
+        }
+    };
     let dispatched_actions = actions.iter();
     let mode_names = lexer.modes().iter().enumerate().map(|(index, mode)| {
         let name = mode.name();
@@ -175,21 +196,9 @@ pub(crate) fn emit(
                     #(#scan_skips)*
                     _ => {
                         let start = cursor;
-                        let text = unsafe { input.get_unchecked(start..end) };
                         *offset = end;
                         *span = #runtime::Span::new(start, end);
-                        let result = match rule {
-                            #(#direct_actions)*
-                            _ => unreachable!("generated lexer selected an unknown rule"),
-                        };
-                        let (result, mode_action) = result;
-                        return Some(match result {
-                            Ok(token) => Ok((token, mode_action)),
-                            Err(error) => Err((
-                                #runtime::ScanError::invalid_payload(*span, error),
-                                mode_action,
-                            )),
-                        });
+                        #direct_execution
                     }
                 }
             }
@@ -203,6 +212,7 @@ pub(crate) fn emit(
             Result<Option<Self>, #payload_runtime::PayloadError>,
             #lexer_runtime::ModeAction,
         ) {
+            let _ = text;
             match rule {
                 #(#dispatched_actions)*
                 _ => unreachable!("generated lexer selected an unknown rule"),
