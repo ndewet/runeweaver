@@ -50,6 +50,7 @@ enum Token {
 }
 
 let tokens = Token::scan("answer == 42")
+    .spanned()
     .collect::<Result<Vec<_>, _>>()
     .expect("the input is valid");
 
@@ -168,8 +169,11 @@ input.
 
 ## Spans and errors
 
-`Token::scan(input)` yields `Result<Spanned<Token>, ScanError>`. A `Span` is
-a half-open range of absolute UTF-8 byte offsets:
+`Token::scan(input)` yields `Result<Token, ScanError>`. The scan retains the
+current range for `span()` and `slice()`. Add `.spanned()` to include each range
+in the iterator item.
+
+A `Span` is a half-open range of absolute UTF-8 byte offsets:
 
 ```rust
 use runeweaver::Span;

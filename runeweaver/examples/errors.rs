@@ -11,7 +11,7 @@ enum Token {
 
 fn main() {
     let input = "one @ two";
-    let scanned: Vec<_> = Token::scan(input).collect();
+    let scanned: Vec<_> = Token::scan(input).spanned().collect();
 
     assert_eq!(
         scanned,

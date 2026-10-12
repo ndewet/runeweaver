@@ -25,6 +25,14 @@ use syn::{
 ///
 /// ```
 /// # extern crate self as runeweaver;
+/// # #[derive(Clone, Copy)]
+/// # pub struct Span;
+/// # impl Span { pub fn new(_: usize, _: usize) -> Self { Self } }
+/// # pub struct ScanError;
+/// # impl ScanError {
+/// #     pub fn unrecognized(_: Span) -> Self { Self }
+/// #     pub fn invalid_payload(_: Span, _: payload::PayloadError) -> Self { Self }
+/// # }
 /// # pub mod lexer {
 /// # use crate::payload::PayloadError;
 /// # pub enum ModeAction {
@@ -33,24 +41,17 @@ use syn::{
 /// #     Push(usize),
 /// #     Pop,
 /// # }
-/// # pub struct RuleOutput<T> { pub token: Option<T>, pub mode_action: ModeAction }
+/// # pub type ScanMatch<T> = Result<(Option<T>, ModeAction), (crate::ScanError, ModeAction)>;
 /// # pub trait Automaton: Sized {
-/// #     fn start_state(mode: usize) -> Option<usize>;
-/// #     fn next_state(state: usize, byte: u8) -> Option<usize>;
-/// #     fn accepting_rule(state: usize) -> Option<usize>;
-/// #     fn execute_rule(rule: usize, text: &str) -> Result<RuleOutput<Self>, crate::payload::PayloadError>;
+/// #     fn next_token(input: &str, offset: &mut usize, span: &mut crate::Span, mode: usize) -> Option<ScanMatch<Self>>;
 /// #     fn mode_name(mode: usize) -> &'static str;
 /// # }
 /// # }
 /// # pub mod payload {
-/// # use crate::lexer::ModeAction;
 /// # pub struct PayloadError;
 /// # impl PayloadError {
 /// #     pub fn new(_: impl Into<String>) -> Self {
 /// #         Self
-/// #     }
-/// #     pub fn with_mode_action(self, _: ModeAction) -> Self {
-/// #         self
 /// #     }
 /// # }
 /// # }
@@ -170,23 +171,14 @@ fn derive_lexer_inner(input: DeriveInput) -> Result<proc_macro2::TokenStream> {
         }
 
         impl #impl_generics #runtime::lexer::Automaton for #ident #type_generics #where_clause {
-            fn start_state(mode: usize) -> Option<usize> {
-                Self::__runeweaver_start(mode)
-            }
-
-            fn next_state(state: usize, byte: u8) -> Option<usize> {
-                Self::__runeweaver_transition(state, byte)
-            }
-
-            fn accepting_rule(state: usize) -> Option<usize> {
-                Self::__runeweaver_accept(state)
-            }
-
-            fn execute_rule(
-                rule: usize,
-                text: &str,
-            ) -> Result<#runtime::lexer::RuleOutput<Self>, #runtime::payload::PayloadError> {
-                Self::__runeweaver_action(rule, text)
+            #[inline(always)]
+            fn next_token(
+                input: &str,
+                offset: &mut usize,
+                span: &mut #runtime::Span,
+                mode: usize,
+            ) -> Option<#runtime::lexer::ScanMatch<Self>> {
+                Self::__runeweaver_next(input, offset, span, mode)
             }
 
             fn mode_name(mode: usize) -> &'static str {
