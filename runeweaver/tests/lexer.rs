@@ -7,7 +7,10 @@ use runeweaver::{Lexer, ScanError, Scanner, Span, Spanned};
 use std::convert::Infallible;
 use std::str::FromStr;
 
-fn first<T: Lexer>(input: &str) -> Option<(T, usize)> {
+fn first<T: Lexer>(input: &str) -> Option<(T, usize)>
+where
+    T::Extras: Default,
+{
     T::scan(input)
         .spanned()
         .next()?
@@ -70,9 +73,12 @@ type GeneratedMatch<T> = Result<(RuleOutput<T>, usize, usize), (ScanError, usize
 fn generated_match<T: Automaton + InspectAutomaton>(
     input: &str,
     mode: usize,
-) -> Option<GeneratedMatch<T>> {
+) -> Option<GeneratedMatch<T>>
+where
+    T::Extras: Default,
+{
     T::start_state(mode)?;
-    let mut scanner = Scanner::<T>::new(input);
+    let mut scanner = Scanner::<T, T::Extras>::new(input);
     match T::next_token(&mut scanner, mode) {
         Some(Ok((token, mode_action))) => Some(Ok((
             RuleOutput { token, mode_action },
@@ -86,6 +92,7 @@ fn generated_match<T: Automaton + InspectAutomaton>(
 }
 
 #[derive(Debug, PartialEq, Lexer)]
+#[lexer(extras = Vec<Option<Result<Token, ScanError>>>)]
 enum Token {
     #[token("a+")]
     As,
@@ -760,6 +767,54 @@ fn a_converter_returns_a_payload_or_a_result() {
     );
 }
 
+#[derive(Debug, PartialEq, Lexer)]
+#[lexer(extras = usize)]
+#[lexer(skip = r"\s+", with_scanner = count_skip)]
+enum StatefulCallbacks {
+    #[token("[a-z]+", with_scanner = count_word)]
+    Word,
+    #[token("[0-9]+", with_scanner = parse_number)]
+    Number(u8),
+    #[token("@", with_scanner = include_bang)]
+    Marker,
+}
+
+fn count_skip(scanner: &mut Scanner<'_, StatefulCallbacks, usize>) {
+    scanner.extras += 10;
+}
+
+fn count_word(scanner: &mut Scanner<'_, StatefulCallbacks, usize>) {
+    scanner.extras += scanner.slice().len();
+}
+
+fn parse_number(
+    scanner: &mut Scanner<'_, StatefulCallbacks, usize>,
+) -> Result<u8, std::num::ParseIntError> {
+    scanner.extras += 1;
+    scanner.slice().parse()
+}
+
+fn include_bang(scanner: &mut Scanner<'_, StatefulCallbacks, usize>) {
+    scanner.extras += 100;
+    if scanner.remainder().starts_with('!') {
+        scanner.bump(1);
+    }
+}
+
+#[test]
+fn scanner_callbacks_access_extras_and_can_extend_a_match() {
+    let mut scanner = StatefulCallbacks::scan_with_extras("hi 42 @!", 0);
+
+    assert_eq!(scanner.next(), Some(Ok(StatefulCallbacks::Word)));
+    assert_eq!(scanner.span(), Span::new(0, 2));
+    assert_eq!(scanner.next(), Some(Ok(StatefulCallbacks::Number(42))));
+    assert_eq!(scanner.span(), Span::new(3, 5));
+    assert_eq!(scanner.next(), Some(Ok(StatefulCallbacks::Marker)));
+    assert_eq!(scanner.span(), Span::new(6, 8));
+    assert_eq!(scanner.extras, 123);
+    assert_eq!(scanner.next(), None);
+}
+
 #[test]
 fn scan_errors_expose_their_location_without_matching_variants() {
     let ranged: ScanError = ScanError::InvalidPayload {
@@ -973,7 +1028,9 @@ macro_rules! inspect_automaton {
             }
 
             fn execute_rule(rule: usize, text: &str) -> Option<RuleOutput<Self>> {
-                let (result, mode_action) = Self::__runeweaver_action(rule, text);
+                let mut scanner = Scanner::<Self, <Self as Automaton>::Extras>::new(text);
+                scanner.__set_match(0, text.len());
+                let (result, mode_action) = Self::__runeweaver_action(rule, text, &mut scanner);
                 result.ok().map(|token| RuleOutput { token, mode_action })
             }
         }

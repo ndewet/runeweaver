@@ -140,8 +140,8 @@ pub(crate) fn emit(
         #selector
 
         #[inline(always)]
-        fn __runeweaver_next<Extras>(
-            scanner: &mut #runtime::Scanner<'_, Self, Extras>,
+        fn __runeweaver_next(
+            scanner: &mut #runtime::Scanner<'_, Self, <Self as #lexer_runtime::Automaton>::Extras>,
             mode: usize,
         ) -> Option<#lexer_runtime::ScanMatch<Self>> {
             let input = #runtime::Scanner::source(scanner);
@@ -196,6 +196,7 @@ pub(crate) fn emit(
         fn __runeweaver_action(
             rule: usize,
             text: &str,
+            scanner: &mut #runtime::Scanner<'_, Self, <Self as #lexer_runtime::Automaton>::Extras>,
         ) -> (
             Result<Option<Self>, #payload_runtime::PayloadError>,
             #lexer_runtime::ModeAction,
@@ -264,7 +265,7 @@ mod tests {
         assert!(actual.contains("fn __runeweaver_transition"));
         assert!(actual.contains("fn __runeweaver_accept"));
         assert!(actual.contains("fn __runeweaver_select"));
-        assert!(actual.contains("Scanner < '_ , Self , Extras >"));
+        assert!(actual.contains("Scanner < '_ , Self"));
         assert!(!actual.contains("__runeweaver_select_spanned"));
     }
 

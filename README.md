@@ -167,6 +167,32 @@ A failed `FromStr` or converter becomes `ScanError::InvalidPayload`. The
 scan consumes that lexeme, reports its span, and continues with subsequent
 input.
 
+Use `with_scanner` when conversion needs scan state. Declare the state type
+with `extras`, then supply its initial value with `scan_with_extras`:
+
+```rust
+use runeweaver::{Lexer, Scanner};
+
+#[derive(Debug, PartialEq, Lexer)]
+#[lexer(extras = usize)]
+enum Token {
+    #[token("[a-z]+", with_scanner = count)]
+    Word,
+}
+
+fn count(scanner: &mut Scanner<'_, Token, usize>) {
+    scanner.extras += 1;
+}
+
+let mut scanner = Token::scan_with_extras("one two", 0);
+assert_eq!(scanner.next(), Some(Ok(Token::Word)));
+assert_eq!(scanner.extras, 1);
+```
+
+A scanner converter can inspect `source`, `slice`, and `remainder`. It can use
+`bump` to include more input in the current match. A skip rule can also use
+`with_scanner` to update state without emitting a token.
+
 ## Spans and errors
 
 `Token::scan(input)` yields `Result<Token, ScanError>`. The scan retains the
