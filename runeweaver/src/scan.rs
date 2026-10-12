@@ -267,6 +267,30 @@ impl<'input, T, Extras> Scanner<'input, T, Extras> {
         self.span.end = end;
     }
 
+    #[doc(hidden)]
+    #[inline(always)]
+    pub fn __set_position(&mut self, position: usize) {
+        assert!(
+            position <= self.input.len() && self.input.is_char_boundary(position),
+            "invalid scanner position"
+        );
+        self.offset = position;
+    }
+
+    #[doc(hidden)]
+    #[inline(always)]
+    pub fn __set_match(&mut self, start: usize, end: usize) {
+        assert!(
+            start <= end
+                && end <= self.input.len()
+                && self.input.is_char_boundary(start)
+                && self.input.is_char_boundary(end),
+            "invalid scanner match"
+        );
+        self.offset = end;
+        self.span = Span::new(start, end);
+    }
+
     /// Returns the byte range of the most recent token or error.
     ///
     /// The range is empty at byte zero before the first scan result.
@@ -387,7 +411,8 @@ impl<T: Lexer, Extras> Scanner<'_, T, Extras> {
                 return None;
             }
 
-            let result = T::next_token(self.input, &mut self.offset, &mut self.span, self.mode.id);
+            let mode = self.mode.id;
+            let result = T::next_token(self, mode);
             let Some(result) = result else {
                 continue;
             };
