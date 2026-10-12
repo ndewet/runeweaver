@@ -19,6 +19,21 @@ const CASES: &[Case] = &[
         location: "src/bin/borrowed_payload.rs:6:10",
     },
     Case {
+        name: "duplicate_converter",
+        message: "error: `with` can be specified only once",
+        location: "src/bin/duplicate_converter.rs:9:34",
+    },
+    Case {
+        name: "duplicate_mode_action",
+        message: "error: a lexer rule can have only one mode action",
+        location: "src/bin/duplicate_mode_action.rs:6:23",
+    },
+    Case {
+        name: "duplicate_modes",
+        message: "error: `modes` can be specified only once",
+        location: "src/bin/duplicate_modes.rs:6:35",
+    },
+    Case {
         name: "invalid_pattern",
         message: "error: unclosed '[' at position 0",
         location: "src/bin/invalid_pattern.rs:5:13",
