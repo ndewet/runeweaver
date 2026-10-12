@@ -1,6 +1,7 @@
 //! Token iteration and recoverable scan errors.
 
-use crate::lexer::{Automaton, ModeAction, RuleOutput};
+use crate::lexer::ModeAction;
+use crate::payload::PayloadError;
 use crate::{Lexer, Span, Spanned};
 use std::fmt::{Display, Formatter};
 use std::marker::PhantomData;
@@ -30,6 +31,36 @@ pub enum ScanError {
 }
 
 impl ScanError {
+    /// Creates an error for an input character that no rule accepted.
+    #[doc(hidden)]
+    #[cold]
+    #[inline(never)]
+    #[must_use]
+    pub fn unrecognized(span: Span) -> Self {
+        Self::Unrecognized { span }
+    }
+
+    /// Creates an error for a failed payload conversion.
+    #[doc(hidden)]
+    #[cold]
+    #[inline(never)]
+    #[must_use]
+    pub fn invalid_payload(span: Span, error: PayloadError) -> Self {
+        Self::InvalidPayload {
+            span,
+            message: error.into_message(),
+        }
+    }
+
+    /// Creates an error for an unclosed lexer mode.
+    #[doc(hidden)]
+    #[cold]
+    #[inline(never)]
+    #[must_use]
+    pub fn unterminated_mode(span: Span, mode: &'static str) -> Self {
+        Self::UnterminatedMode { span, mode }
+    }
+
     /// Returns the byte range associated with this error.
     #[must_use]
     pub const fn span(&self) -> Span {
@@ -71,11 +102,14 @@ impl std::error::Error for ScanError {}
 pub struct Scan<'input, T> {
     input: &'input str,
     offset: usize,
-    modes: Vec<ModeFrame>,
+    span: Span,
+    mode: ModeFrame,
+    parent_modes: Vec<ModeFrame>,
     finished: bool,
     marker: PhantomData<T>,
 }
 
+#[derive(Clone, Copy)]
 struct ModeFrame {
     id: usize,
     opened_at: usize,
@@ -86,40 +120,158 @@ impl<'input, T> Scan<'input, T> {
         Self {
             input,
             offset: 0,
-            modes: vec![ModeFrame {
+            span: Span::at(0),
+            mode: ModeFrame {
                 id: 0,
                 opened_at: 0,
-            }],
+            },
+            parent_modes: Vec::new(),
             finished: false,
             marker: PhantomData,
         }
     }
 
-    /// Returns the byte offset at which the next token will begin.
+    /// Returns the byte offset at which the next scan starts.
     pub const fn position(&self) -> usize {
         self.offset
     }
+
+    /// Returns the byte range of the most recent token or error.
+    ///
+    /// The range is empty at byte zero before the first scan result.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use runeweaver::{Lexer, Span};
+    ///
+    /// #[derive(Lexer)]
+    /// enum Token {
+    ///     #[token("[a-z]+")]
+    ///     Word,
+    /// }
+    ///
+    /// let mut scan = Token::scan("word");
+    /// let _ = scan.next();
+    /// assert_eq!(scan.span(), Span::new(0, 4));
+    /// ```
+    pub const fn span(&self) -> Span {
+        self.span
+    }
+
+    /// Returns the input text of the most recent token or error.
+    ///
+    /// The text is empty before the first scan result.
+    ///
+    /// # Panics
+    ///
+    /// Panics if a manually implemented [`Lexer`] reports a span outside its input.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use runeweaver::Lexer;
+    ///
+    /// #[derive(Lexer)]
+    /// enum Token {
+    ///     #[token("[a-z]+")]
+    ///     Word,
+    /// }
+    ///
+    /// let mut scan = Token::scan("word");
+    /// let _ = scan.next();
+    /// assert_eq!(scan.slice(), "word");
+    /// ```
+    pub fn slice(&self) -> &'input str {
+        self.span
+            .text(self.input)
+            .expect("a scan span is valid for its input")
+    }
+
+    /// Adds the current byte range to each scanned token.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use runeweaver::{Lexer, Span};
+    ///
+    /// #[derive(Debug, PartialEq, Lexer)]
+    /// enum Token {
+    ///     #[token("[a-z]+")]
+    ///     Word,
+    /// }
+    ///
+    /// let token = Token::scan("word").spanned().next().expect("one token")?;
+    /// assert_eq!(token.token, Token::Word);
+    /// assert_eq!(token.span, Span::new(0, 4));
+    /// # Ok::<(), runeweaver::ScanError>(())
+    /// ```
+    pub fn spanned(self) -> SpannedScan<'input, T> {
+        SpannedScan { scan: self }
+    }
+}
+
+/// Iterates over tokens with their byte ranges and scanning errors.
+pub struct SpannedScan<'input, T> {
+    scan: Scan<'input, T>,
 }
 
 impl<T: Lexer> Scan<'_, T> {
+    #[inline(always)]
     fn apply_mode_action(&mut self, action: ModeAction, start: usize) {
         match action {
             ModeAction::Stay => {}
             ModeAction::Begin(id) => {
-                let frame = self
-                    .modes
-                    .last_mut()
-                    .expect("the mode stack contains INITIAL");
-                frame.id = id;
-                frame.opened_at = start;
+                self.mode.id = id;
+                self.mode.opened_at = start;
             }
-            ModeAction::Push(id) => self.modes.push(ModeFrame {
-                id,
-                opened_at: start,
-            }),
+            ModeAction::Push(id) => {
+                self.parent_modes.push(self.mode);
+                self.mode = ModeFrame {
+                    id,
+                    opened_at: start,
+                };
+            }
             ModeAction::Pop => {
-                if self.modes.len() > 1 {
-                    self.modes.pop();
+                if let Some(parent) = self.parent_modes.pop() {
+                    self.mode = parent;
+                }
+            }
+        }
+    }
+
+    #[inline(always)]
+    fn next_token(&mut self) -> Option<Result<T, ScanError>> {
+        loop {
+            if self.offset == self.input.len() {
+                self.finished = true;
+                if !self.parent_modes.is_empty() {
+                    let frame = self.parent_modes.get(1).unwrap_or(&self.mode);
+                    self.span = Span::new(frame.opened_at, self.offset);
+                    return Some(Err(ScanError::unterminated_mode(
+                        self.span,
+                        T::mode_name(frame.id),
+                    )));
+                }
+                return None;
+            }
+
+            let result = T::next_token(self.input, &mut self.offset, &mut self.span, self.mode.id);
+            let Some(result) = result else {
+                continue;
+            };
+
+            let start = self.span.start;
+            match result {
+                Ok((token, mode_action)) => {
+                    self.apply_mode_action(mode_action, start);
+                    if let Some(token) = token {
+                        return Some(Ok(token));
+                    }
+                }
+                Err((error, mode_action)) => {
+                    self.apply_mode_action(mode_action, start);
+                    return Some(Err(error));
                 }
             }
         }
@@ -127,147 +279,27 @@ impl<T: Lexer> Scan<'_, T> {
 }
 
 impl<T: Lexer> Iterator for Scan<'_, T> {
-    type Item = Result<Spanned<T>, ScanError>;
+    type Item = Result<T, ScanError>;
 
+    #[inline(always)]
     fn next(&mut self) -> Option<Self::Item> {
         if self.finished {
             return None;
         }
-        loop {
-            if self.offset == self.input.len() {
-                self.finished = true;
-                return self.modes.get(1).map(|frame| {
-                    Err(ScanError::UnterminatedMode {
-                        span: Span::new(frame.opened_at, self.offset),
-                        mode: T::mode_name(frame.id),
-                    })
-                });
-            }
-
-            let start = self.offset;
-            let mode = self
-                .modes
-                .last()
-                .expect("the mode stack contains INITIAL")
-                .id;
-            let (rule, length) = match match_prefix::<T>(&self.input[start..], mode) {
-                PrefixMatch::Accepted { rule, length } => (rule, length),
-                PrefixMatch::Rejected {
-                    examined: _examined,
-                } => {
-                    // Keep one-character recovery for now. The examined length is
-                    // available when the recovery policy is revised.
-                    self.offset += self.input[start..]
-                        .chars()
-                        .next()
-                        .expect("the input is not empty")
-                        .len_utf8();
-                    return Some(Err(ScanError::Unrecognized {
-                        span: Span::new(start, self.offset),
-                    }));
-                }
-            };
-
-            assert!(length > 0, "a lexer rule matched empty input");
-            let text = &self.input[start..start + length];
-            let RuleOutput { token, mode_action } = match T::execute_rule(rule, text) {
-                Ok(output) => output,
-                Err(error) => {
-                    self.offset += length;
-                    self.apply_mode_action(error.mode_action(), start);
-                    return Some(Err(ScanError::InvalidPayload {
-                        span: Span::new(start, self.offset),
-                        message: error.to_string(),
-                    }));
-                }
-            };
-            self.offset += length;
-            self.apply_mode_action(mode_action, start);
-            if let Some(token) = token {
-                return Some(Ok(Spanned {
-                    token,
-                    span: Span::new(start, self.offset),
-                }));
-            }
-        }
+        self.next_token()
     }
 }
 
-enum PrefixMatch {
-    Accepted { rule: usize, length: usize },
-    Rejected { examined: usize },
-}
+impl<T: Lexer> Iterator for SpannedScan<'_, T> {
+    type Item = Result<Spanned<T>, ScanError>;
 
-fn match_prefix<T: Automaton>(input: &str, mode: usize) -> PrefixMatch {
-    let Some(mut state) = T::start_state(mode) else {
-        return PrefixMatch::Rejected { examined: 0 };
-    };
-    let mut latest = T::accepting_rule(state).map(|rule| (rule, 0));
-    let mut examined = 0;
-
-    for (index, &byte) in input.as_bytes().iter().enumerate() {
-        let Some(next) = T::next_state(state, byte) else {
-            break;
-        };
-        state = next;
-        examined = index + 1;
-        if let Some(rule) = T::accepting_rule(state) {
-            latest = Some((rule, examined));
-        }
-    }
-
-    latest.map_or(PrefixMatch::Rejected { examined }, |(rule, length)| {
-        PrefixMatch::Accepted { rule, length }
-    })
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{PrefixMatch, match_prefix};
-    use crate::lexer::{Automaton, RuleOutput};
-    use crate::payload::PayloadError;
-
-    struct AStarB;
-
-    impl Automaton for AStarB {
-        fn start_state(mode: usize) -> Option<usize> {
-            (mode == 0).then_some(0)
-        }
-
-        fn next_state(state: usize, byte: u8) -> Option<usize> {
-            match (state, byte) {
-                (0, b'a') => Some(0),
-                (0, b'b') => Some(1),
-                _ => None,
-            }
-        }
-
-        fn accepting_rule(state: usize) -> Option<usize> {
-            (state == 1).then_some(0)
-        }
-
-        fn execute_rule(_: usize, _: &str) -> Result<RuleOutput<Self>, PayloadError> {
-            unreachable!("prefix matching does not execute a rule")
-        }
-
-        fn mode_name(_: usize) -> &'static str {
-            "INITIAL"
-        }
-    }
-
-    #[test]
-    fn a_rejected_prefix_reports_how_many_bytes_the_automaton_examined() {
-        assert!(matches!(
-            match_prefix::<AStarB>("aaaa!", 0),
-            PrefixMatch::Rejected { examined: 4 }
-        ));
-    }
-
-    #[test]
-    fn an_accepted_prefix_reports_the_winning_rule_and_length() {
-        assert!(matches!(
-            match_prefix::<AStarB>("aaab!", 0),
-            PrefixMatch::Accepted { rule: 0, length: 4 }
-        ));
+    #[inline(always)]
+    fn next(&mut self) -> Option<Self::Item> {
+        self.scan.next().map(|result| {
+            result.map(|token| Spanned {
+                token,
+                span: self.scan.span,
+            })
+        })
     }
 }

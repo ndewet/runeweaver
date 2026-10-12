@@ -17,5 +17,5 @@ mod scan;
 mod span;
 
 pub use lexer::Lexer;
-pub use scan::{Scan, ScanError};
+pub use scan::{Scan, ScanError, SpannedScan};
 pub use span::{Span, Spanned};

@@ -1,14 +1,10 @@
 //! The public lexer trait and the automaton interface used by generated lexers.
 
-use crate::Scan;
-use crate::payload::PayloadError;
+use crate::{Scan, Span};
 
-/// A rule's effect after the runtime selects it.
+/// A generated scan result and its mode action.
 #[doc(hidden)]
-pub struct RuleOutput<T> {
-    pub token: Option<T>,
-    pub mode_action: ModeAction,
-}
+pub type ScanMatch<T> = Result<(Option<T>, ModeAction), (crate::ScanError, ModeAction)>;
 
 /// A generated lexer rule's update to the mode stack.
 #[doc(hidden)]
@@ -23,10 +19,12 @@ pub enum ModeAction {
 /// The byte-oriented automaton supplied by a generated lexer.
 #[doc(hidden)]
 pub trait Automaton: Sized {
-    fn start_state(mode: usize) -> Option<usize>;
-    fn next_state(state: usize, byte: u8) -> Option<usize>;
-    fn accepting_rule(state: usize) -> Option<usize>;
-    fn execute_rule(rule: usize, text: &str) -> Result<RuleOutput<Self>, PayloadError>;
+    fn next_token(
+        input: &str,
+        offset: &mut usize,
+        span: &mut Span,
+        mode: usize,
+    ) -> Option<ScanMatch<Self>>;
     fn mode_name(mode: usize) -> &'static str;
 }
 
@@ -46,7 +44,7 @@ pub trait Automaton: Sized {
 /// }
 ///
 /// let token = Token::scan("word").next().expect("one token")?;
-/// assert_eq!(token.token, Token::Word);
+/// assert_eq!(token, Token::Word);
 /// # Ok::<(), runeweaver::ScanError>(())
 /// ```
 pub trait Lexer: Automaton + Sized {

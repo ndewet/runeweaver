@@ -92,6 +92,11 @@ pub(crate) enum RuleAction {
 }
 
 impl RuleAction {
+    /// Reports whether the rule consumes input without producing a token.
+    pub(crate) const fn is_skip(&self) -> bool {
+        matches!(self, Self::Skip)
+    }
+
     /// Renders the generated action for the selected rule.
     pub(crate) fn rendered(&self) -> TokenStream {
         match self {

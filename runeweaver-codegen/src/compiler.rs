@@ -317,7 +317,12 @@ impl LexerDefinition {
     /// Emits this lexer as one private matcher method.
     fn emit(&self, runtime: &TokenStream) -> Result<TokenStream, CompileError> {
         let dfa = self.compile_automaton()?;
-        Ok(emitter::emit(&dfa, self, runtime))
+        let fused_skips = self.rules().iter().enumerate().filter_map(|(index, rule)| {
+            (rule.action().is_skip() && matches!(rule.mode_action(), ResolvedModeAction::Stay))
+                .then_some(index)
+        });
+        let matcher = crate::ir::Matcher::new(&dfa, fused_skips);
+        Ok(emitter::emit(&dfa, &matcher, self, runtime))
     }
 }
 

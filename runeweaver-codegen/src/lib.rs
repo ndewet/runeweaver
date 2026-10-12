@@ -13,7 +13,9 @@
 mod automata;
 mod compiler;
 mod emitter;
+mod ir;
 mod regex;
+mod selector;
 mod specification;
 
 pub use compiler::{CompileError, compile, compile_with_modes, compile_with_modes_at};

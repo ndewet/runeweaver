@@ -1,6 +1,5 @@
 //! Converts what a rule converter returns into a token payload.
 
-use crate::lexer::ModeAction;
 use std::fmt::{Display, Formatter};
 use std::str::FromStr;
 
@@ -9,7 +8,6 @@ use std::str::FromStr;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PayloadError {
     message: String,
-    mode_action: ModeAction,
 }
 
 impl PayloadError {
@@ -17,18 +15,11 @@ impl PayloadError {
     pub fn new(message: impl Into<String>) -> Self {
         Self {
             message: message.into(),
-            mode_action: ModeAction::Stay,
         }
     }
 
-    /// Associates the winning rule's mode action with this error.
-    pub fn with_mode_action(mut self, mode_action: ModeAction) -> Self {
-        self.mode_action = mode_action;
-        self
-    }
-
-    pub(crate) const fn mode_action(&self) -> ModeAction {
-        self.mode_action
+    pub(crate) fn into_message(self) -> String {
+        self.message
     }
 }
 
@@ -42,6 +33,7 @@ impl std::error::Error for PayloadError {}
 
 /// Parses one owned token payload with its [`FromStr`] implementation.
 #[doc(hidden)]
+#[inline(always)]
 pub fn parse_payload<T>(text: &str) -> Result<T, PayloadError>
 where
     T: FromStr,
@@ -75,12 +67,14 @@ pub trait PayloadResult<P> {
 }
 
 impl<P> PayloadResult<P> for P {
+    #[inline(always)]
     fn into_payload(self) -> Result<P, PayloadError> {
         Ok(self)
     }
 }
 
 impl<P, E: Display> PayloadResult<P> for Result<P, E> {
+    #[inline(always)]
     fn into_payload(self) -> Result<P, PayloadError> {
         self.map_err(|error| PayloadError::new(error.to_string()))
     }
