@@ -13,13 +13,19 @@ fn input(source: &str) -> String {
     source.repeat(repetitions)
 }
 
-fn scan<T: Lexer>(input: &str) -> usize {
+fn scan<T: Lexer>(input: &str) -> usize
+where
+    T::Extras: Default,
+{
     T::scan(black_box(input))
         .try_fold(0usize, |count, result| result.map(|_| count + 1))
         .expect("the benchmark source is valid for its token definition")
 }
 
-pub fn benchmark<T: Lexer>(criterion: &mut Criterion, name: &str, source: &str) {
+pub fn benchmark<T: Lexer>(criterion: &mut Criterion, name: &str, source: &str)
+where
+    T::Extras: Default,
+{
     let input = input(source);
     let mut group = criterion.benchmark_group(format!("scanning/{name}"));
     group.sampling_mode(SamplingMode::Flat);
