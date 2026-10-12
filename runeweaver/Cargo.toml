@@ -16,7 +16,7 @@ publish = ["crates-io"]
 name = "runeweaver"
 
 [dependencies]
-runeweaver-derive = { version = "=0.1.0", path = "../runeweaver-derive" }
+runeweaver-derive = { version = "=0.2.0", path = "../runeweaver-derive" }
 
 [lints]
 workspace = true

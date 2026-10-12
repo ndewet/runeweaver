@@ -13,7 +13,7 @@ publish = ["crates-io"]
 proc-macro = true
 
 [dependencies]
-runeweaver-codegen = { version = "=0.1.0", path = "../runeweaver-codegen" }
+runeweaver-codegen = { version = "=0.2.0", path = "../runeweaver-codegen" }
 proc-macro-crate = "3.5"
 proc-macro2 = "1"
 quote = "1"

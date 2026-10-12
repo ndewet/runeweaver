@@ -59,14 +59,14 @@ dependencies = [
 
 [[package]]
 name = "runeweaver"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "runeweaver-derive",
 ]
 
 [[package]]
 name = "runeweaver-codegen"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -74,7 +74,7 @@ dependencies = [
 
 [[package]]
 name = "runeweaver-derive"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "proc-macro-crate",
  "proc-macro2",
