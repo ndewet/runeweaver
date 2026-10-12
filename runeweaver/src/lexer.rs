@@ -66,6 +66,29 @@ pub trait Lexer: Automaton + Sized {
     fn scan(input: &str) -> Scanner<'_, Self> {
         Scanner::new(input)
     }
+
+    /// Scans tokens from `input` with user state.
+    ///
+    /// The scanner keeps `extras` while it scans the input.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use runeweaver::Lexer;
+    ///
+    /// #[derive(Lexer)]
+    /// enum Token {
+    ///     #[token("[a-z]+")]
+    ///     Word,
+    /// }
+    ///
+    /// let mut scanner = Token::scan_with_extras("word", 3_u32);
+    /// scanner.extras += 1;
+    /// assert_eq!(scanner.extras, 4);
+    /// ```
+    fn scan_with_extras<Extras>(input: &str, extras: Extras) -> Scanner<'_, Self, Extras> {
+        Scanner::with_extras(input, extras)
+    }
 }
 
 impl<T: Automaton> Lexer for T {}

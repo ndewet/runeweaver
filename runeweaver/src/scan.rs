@@ -99,7 +99,7 @@ impl std::error::Error for ScanError {}
 /// Invalid input and payload errors consume their byte ranges and scanning
 /// continues. A rule's mode action still takes effect when its
 /// payload conversion fails.
-pub struct Scanner<'input, T> {
+pub struct Scanner<'input, T, Extras = ()> {
     input: &'input str,
     offset: usize,
     span: Span,
@@ -107,6 +107,8 @@ pub struct Scanner<'input, T> {
     parent_modes: Vec<ModeFrame>,
     finished: bool,
     marker: PhantomData<T>,
+    /// User state kept for the lifetime of the scan.
+    pub extras: Extras,
 }
 
 /// An iterator over tokens and scanning errors.
@@ -143,6 +145,28 @@ impl<'input, T> Scanner<'input, T> {
     /// ```
     #[must_use]
     pub fn new(input: &'input str) -> Self {
+        Self::with_extras(input, ())
+    }
+}
+
+impl<'input, T, Extras> Scanner<'input, T, Extras> {
+    /// Creates a scanner for `input` with user state.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use runeweaver::{Lexer, Scanner};
+    ///
+    /// #[derive(Lexer)]
+    /// enum Token {
+    ///     #[token("[a-z]+")]
+    ///     Word,
+    /// }
+    ///
+    /// let scanner = Scanner::<Token, _>::with_extras("word", 7_u32);
+    /// assert_eq!(scanner.extras, 7);
+    /// ```
+    pub fn with_extras(input: &'input str, extras: Extras) -> Self {
         Self {
             input,
             offset: 0,
@@ -154,6 +178,7 @@ impl<'input, T> Scanner<'input, T> {
             parent_modes: Vec::new(),
             finished: false,
             marker: PhantomData,
+            extras,
         }
     }
 
@@ -312,17 +337,17 @@ impl<'input, T> Scanner<'input, T> {
     /// assert_eq!(token.span, Span::new(0, 4));
     /// # Ok::<(), runeweaver::ScanError>(())
     /// ```
-    pub fn spanned(self) -> SpannedScan<'input, T> {
+    pub fn spanned(self) -> SpannedScan<'input, T, Extras> {
         SpannedScan { scan: self }
     }
 }
 
 /// Iterates over tokens with their byte ranges and scanning errors.
-pub struct SpannedScan<'input, T> {
-    scan: Scan<'input, T>,
+pub struct SpannedScan<'input, T, Extras = ()> {
+    scan: Scanner<'input, T, Extras>,
 }
 
-impl<T: Lexer> Scanner<'_, T> {
+impl<T: Lexer, Extras> Scanner<'_, T, Extras> {
     #[inline(always)]
     fn apply_mode_action(&mut self, action: ModeAction, start: usize) {
         match action {
@@ -384,7 +409,7 @@ impl<T: Lexer> Scanner<'_, T> {
     }
 }
 
-impl<T: Lexer> Iterator for Scanner<'_, T> {
+impl<T: Lexer, Extras> Iterator for Scanner<'_, T, Extras> {
     type Item = Result<T, ScanError>;
 
     #[inline(always)]
@@ -396,7 +421,7 @@ impl<T: Lexer> Iterator for Scanner<'_, T> {
     }
 }
 
-impl<T: Lexer> Iterator for SpannedScan<'_, T> {
+impl<T: Lexer, Extras> Iterator for SpannedScan<'_, T, Extras> {
     type Item = Result<Spanned<T>, ScanError>;
 
     #[inline(always)]
