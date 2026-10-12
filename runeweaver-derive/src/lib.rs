@@ -298,27 +298,67 @@ impl RuleConfig {
 
 fn parse_rule_modifiers(input: ParseStream<'_>) -> Result<RuleConfig> {
     let mut config = RuleConfig::stay();
+    let mut has_modes = false;
+    let mut has_mode_action = false;
+    let mut has_converter = false;
     while !input.is_empty() {
         input.parse::<syn::Token![,]>()?;
         let name: syn::Ident = input.parse()?;
         match name.to_string().as_str() {
             "modes" => {
+                if has_modes {
+                    return Err(Error::new_spanned(
+                        name,
+                        "`modes` can be specified only once",
+                    ));
+                }
+                has_modes = true;
                 input.parse::<syn::Token![=]>()?;
                 config.modes = parse_modes(input)?;
             }
             "push" => {
+                if has_mode_action {
+                    return Err(Error::new_spanned(
+                        name,
+                        "a lexer rule can have only one mode action",
+                    ));
+                }
+                has_mode_action = true;
                 input.parse::<syn::Token![=]>()?;
                 config.mode_action = ModeAction::Push(input.parse::<syn::Ident>()?.to_string());
             }
             "begin" => {
+                if has_mode_action {
+                    return Err(Error::new_spanned(
+                        name,
+                        "a lexer rule can have only one mode action",
+                    ));
+                }
+                has_mode_action = true;
                 input.parse::<syn::Token![=]>()?;
                 config.mode_action = ModeAction::Begin(input.parse::<syn::Ident>()?.to_string());
             }
             "with" => {
+                if has_converter {
+                    return Err(Error::new_spanned(
+                        name,
+                        "`with` can be specified only once",
+                    ));
+                }
+                has_converter = true;
                 input.parse::<syn::Token![=]>()?;
                 config.converter = Some(input.parse()?);
             }
-            "pop" => config.mode_action = ModeAction::Pop,
+            "pop" => {
+                if has_mode_action {
+                    return Err(Error::new_spanned(
+                        name,
+                        "a lexer rule can have only one mode action",
+                    ));
+                }
+                has_mode_action = true;
+                config.mode_action = ModeAction::Pop;
+            }
             _ => {
                 return Err(Error::new_spanned(
                     name,
