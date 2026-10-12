@@ -31,6 +31,27 @@ fn scanner_exposes_and_updates_its_source_state() {
     assert_eq!(scanner.next(), None);
 }
 
+#[test]
+fn scanner_keeps_user_state_while_it_scans() {
+    let mut scanner = Token::scan_with_extras("aaa b", Vec::new());
+
+    let first = scanner.next();
+    scanner.extras.push(first);
+    let second = scanner.next();
+    scanner.extras.push(second);
+
+    assert_eq!(
+        scanner.extras,
+        vec![
+            Some(Ok(Token::As)),
+            Some(Err(ScanError::Unrecognized {
+                span: Span::new(3, 4),
+            })),
+        ]
+    );
+    assert_eq!(scanner.remainder(), "b");
+}
+
 #[derive(Debug, PartialEq, Eq)]
 struct RuleOutput<T> {
     token: Option<T>,
