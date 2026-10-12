@@ -140,16 +140,15 @@ pub(crate) fn emit(
         #selector
 
         #[inline(always)]
-        fn __runeweaver_next(
-            input: &str,
-            offset: &mut usize,
-            span: &mut #runtime::Span,
+        fn __runeweaver_next<Extras>(
+            scanner: &mut #runtime::Scanner<'_, Self, Extras>,
             mode: usize,
         ) -> Option<#lexer_runtime::ScanMatch<Self>> {
-            let mut cursor = *offset;
+            let input = #runtime::Scanner::source(scanner);
+            let mut cursor = #runtime::Scanner::position(scanner);
             loop {
                 if cursor == input.len() {
-                    *offset = cursor;
+                    scanner.__set_position(cursor);
                     return None;
                 }
                 let Some((rule, length)) = Self::__runeweaver_select(
@@ -162,10 +161,9 @@ pub(crate) fn emit(
                         .next()
                         .expect("the input is not empty")
                         .len_utf8();
-                    *offset = cursor;
-                    *span = #runtime::Span::new(start, cursor);
+                    scanner.__set_match(start, cursor);
                     return Some(Err((
-                        #runtime::ScanError::unrecognized(*span),
+                        #runtime::ScanError::unrecognized(scanner.span()),
                         #lexer_runtime::ModeAction::Stay,
                     )));
                 };
@@ -176,8 +174,7 @@ pub(crate) fn emit(
                     _ => {
                         let start = cursor;
                         let text = unsafe { input.get_unchecked(start..end) };
-                        *offset = end;
-                        *span = #runtime::Span::new(start, end);
+                        scanner.__set_match(start, end);
                         let result = match rule {
                             #(#direct_actions)*
                             _ => unreachable!("generated lexer selected an unknown rule"),
@@ -186,7 +183,7 @@ pub(crate) fn emit(
                         return Some(match result {
                             Ok(token) => Ok((token, mode_action)),
                             Err(error) => Err((
-                                #runtime::ScanError::invalid_payload(*span, error),
+                                #runtime::ScanError::invalid_payload(scanner.span(), error),
                                 mode_action,
                             )),
                         });
@@ -267,6 +264,7 @@ mod tests {
         assert!(actual.contains("fn __runeweaver_transition"));
         assert!(actual.contains("fn __runeweaver_accept"));
         assert!(actual.contains("fn __runeweaver_select"));
+        assert!(actual.contains("Scanner < '_ , Self , Extras >"));
         assert!(!actual.contains("__runeweaver_select_spanned"));
     }
 

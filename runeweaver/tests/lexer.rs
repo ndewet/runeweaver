@@ -3,7 +3,7 @@
 #![deny(dead_code)]
 
 use runeweaver::lexer::{Automaton, ModeAction};
-use runeweaver::{Lexer, ScanError, Span, Spanned};
+use runeweaver::{Lexer, ScanError, Scanner, Span, Spanned};
 use std::convert::Infallible;
 use std::str::FromStr;
 
@@ -72,12 +72,15 @@ fn generated_match<T: Automaton + InspectAutomaton>(
     mode: usize,
 ) -> Option<GeneratedMatch<T>> {
     T::start_state(mode)?;
-    let mut offset = 0;
-    let mut span = Span::at(0);
-    match T::next_token(input, &mut offset, &mut span, mode) {
-        Some(Ok((token, mode_action))) => Some(Ok((RuleOutput { token, mode_action }, 0, offset))),
-        Some(Err((error, _))) => Some(Err((error, span.start, span.end))),
-        None if offset != 0 => Some(Ok((stay(None), 0, offset))),
+    let mut scanner = Scanner::<T>::new(input);
+    match T::next_token(&mut scanner, mode) {
+        Some(Ok((token, mode_action))) => Some(Ok((
+            RuleOutput { token, mode_action },
+            0,
+            scanner.position(),
+        ))),
+        Some(Err((error, _))) => Some(Err((error, scanner.span().start, scanner.span().end))),
+        None if scanner.position() != 0 => Some(Ok((stay(None), 0, scanner.position()))),
         None => None,
     }
 }
