@@ -1,6 +1,6 @@
 //! The public lexer trait and the automaton interface used by generated lexers.
 
-use crate::{Scan, Span};
+use crate::{Scanner, Span};
 
 /// A generated scan result and its mode action.
 #[doc(hidden)]
@@ -63,8 +63,8 @@ pub trait Lexer: Automaton + Sized {
     ///
     /// assert_eq!(Token::scan("word").count(), 1);
     /// ```
-    fn scan(input: &str) -> Scan<'_, Self> {
-        Scan::new(input)
+    fn scan(input: &str) -> Scanner<'_, Self> {
+        Scanner::new(input)
     }
 }
 
