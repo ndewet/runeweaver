@@ -19,8 +19,11 @@ pub enum ModeAction {
 /// The byte-oriented automaton supplied by a generated lexer.
 #[doc(hidden)]
 pub trait Automaton: Sized {
+    /// User state stored in this token type's scanner.
+    type Extras;
+
     fn next_token(
-        scanner: &mut Scanner<'_, Self, impl Sized>,
+        scanner: &mut Scanner<'_, Self, Self::Extras>,
         mode: usize,
     ) -> Option<ScanMatch<Self>>;
     fn mode_name(mode: usize) -> &'static str;
@@ -61,8 +64,11 @@ pub trait Lexer: Automaton + Sized {
     ///
     /// assert_eq!(Token::scan("word").count(), 1);
     /// ```
-    fn scan(input: &str) -> Scanner<'_, Self> {
-        Scanner::new(input)
+    fn scan(input: &str) -> Scanner<'_, Self, Self::Extras>
+    where
+        Self::Extras: Default,
+    {
+        Scanner::with_extras(input, Self::Extras::default())
     }
 
     /// Scans tokens from `input` with user state.
@@ -75,16 +81,17 @@ pub trait Lexer: Automaton + Sized {
     /// use runeweaver::Lexer;
     ///
     /// #[derive(Lexer)]
+    /// #[lexer(extras = u32)]
     /// enum Token {
     ///     #[token("[a-z]+")]
     ///     Word,
     /// }
     ///
-    /// let mut scanner = Token::scan_with_extras("word", 3_u32);
+    /// let mut scanner = Token::scan_with_extras("word", 3);
     /// scanner.extras += 1;
     /// assert_eq!(scanner.extras, 4);
     /// ```
-    fn scan_with_extras<Extras>(input: &str, extras: Extras) -> Scanner<'_, Self, Extras> {
+    fn scan_with_extras(input: &str, extras: Self::Extras) -> Scanner<'_, Self, Self::Extras> {
         Scanner::with_extras(input, extras)
     }
 }

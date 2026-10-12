@@ -14,6 +14,11 @@ struct Case {
 
 const CASES: &[Case] = &[
     Case {
+        name: "duplicate_extras",
+        message: "error: `extras` can be specified only once",
+        location: "src/bin/duplicate_extras.rs:5:1",
+    },
+    Case {
         name: "borrowed_payload",
         message: "error: token payloads must be owned",
         location: "src/bin/borrowed_payload.rs:6:10",

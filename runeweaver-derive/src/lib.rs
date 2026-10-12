@@ -20,6 +20,7 @@ use syn::{
 /// Every variant needs one `#[token("pattern")]` attribute. Unit variants
 /// emit no payload; a single-field tuple variant parses an owned payload.
 /// Rules are considered in declaration order when equal-length matches tie.
+/// Use `with_scanner` for a converter that receives mutable scanner state.
 ///
 /// # Examples
 ///
@@ -50,7 +51,8 @@ use syn::{
 /// # }
 /// # pub type ScanMatch<T> = Result<(Option<T>, ModeAction), (crate::ScanError, ModeAction)>;
 /// # pub trait Automaton: Sized {
-/// #     fn next_token(scanner: &mut crate::Scanner<'_, Self, impl Sized>, mode: usize) -> Option<ScanMatch<Self>>;
+/// #     type Extras;
+/// #     fn next_token(scanner: &mut crate::Scanner<'_, Self, Self::Extras>, mode: usize) -> Option<ScanMatch<Self>>;
 /// #     fn mode_name(mode: usize) -> &'static str;
 /// # }
 /// # }
@@ -93,33 +95,46 @@ fn derive_lexer_inner(input: DeriveInput) -> Result<proc_macro2::TokenStream> {
 
     let runtime = runtime_path();
     let LexerConfig {
+        extras,
         modes,
         mut rules,
         mut patterns,
-    } = lexer_attributes(&input.attrs)?;
+    } = lexer_attributes(&input.attrs, &runtime)?;
     for variant in data.variants {
         let attribute = rule_attribute(&variant.attrs, &variant.ident)?;
         let pattern = attribute.pattern.clone();
         let converter = attribute.converter;
         let variant_ident = variant.ident;
         let action = match variant.fields {
-            Fields::Unit => {
-                if converter.is_some() {
+            Fields::Unit => match converter {
+                Some(Converter::Text(_)) => {
                     return Err(Error::new_spanned(
                         variant_ident,
                         "a unit token variant has no payload, thus it cannot have `with`",
                     ));
                 }
-                quote!(Ok(Some(Self::#variant_ident)))
-            }
+                Some(Converter::Scanner(converter)) => quote! {
+                    #runtime::payload::PayloadResult::<()>::into_payload(
+                        (#converter)(scanner),
+                    )
+                    .map(|()| Some(Self::#variant_ident))
+                },
+                None => quote!(Ok(Some(Self::#variant_ident))),
+            },
             Fields::Unnamed(fields) if fields.unnamed.len() == 1 => {
                 let field = fields.unnamed.first().expect("one field was checked");
                 let Type::Reference(_) = field.ty else {
                     let payload_type = &field.ty;
                     let action = match converter {
-                        Some(converter) => quote! {
+                        Some(Converter::Text(converter)) => quote! {
                             #runtime::payload::PayloadResult::<#payload_type>::into_payload(
                                 (#converter)(text),
+                            )
+                            .map(|payload| Some(Self::#variant_ident(payload)))
+                        },
+                        Some(Converter::Scanner(converter)) => quote! {
+                            #runtime::payload::PayloadResult::<#payload_type>::into_payload(
+                                (#converter)(scanner),
                             )
                             .map(|payload| Some(Self::#variant_ident(payload)))
                         },
@@ -178,9 +193,11 @@ fn derive_lexer_inner(input: DeriveInput) -> Result<proc_macro2::TokenStream> {
         }
 
         impl #impl_generics #runtime::lexer::Automaton for #ident #type_generics #where_clause {
+            type Extras = #extras;
+
             #[inline(always)]
             fn next_token(
-                scanner: &mut #runtime::Scanner<'_, Self, impl Sized>,
+                scanner: &mut #runtime::Scanner<'_, Self, Self::Extras>,
                 mode: usize,
             ) -> Option<#runtime::lexer::ScanMatch<Self>> {
                 Self::__runeweaver_next(scanner, mode)
@@ -194,12 +211,17 @@ fn derive_lexer_inner(input: DeriveInput) -> Result<proc_macro2::TokenStream> {
 }
 
 struct LexerConfig {
+    extras: Type,
     modes: Vec<String>,
     rules: Vec<RuleSpec>,
     patterns: Vec<LitStr>,
 }
 
-fn lexer_attributes(attributes: &[syn::Attribute]) -> Result<LexerConfig> {
+fn lexer_attributes(
+    attributes: &[syn::Attribute],
+    runtime: &proc_macro2::TokenStream,
+) -> Result<LexerConfig> {
+    let mut extras = None;
     let mut modes = Vec::new();
     let mut rules = Vec::new();
     let mut patterns = Vec::new();
@@ -215,18 +237,43 @@ fn lexer_attributes(attributes: &[syn::Attribute]) -> Result<LexerConfig> {
                 modes.push(mode);
                 return Ok(());
             }
-            if config.name != "skip" {
-                return Err(Error::new_spanned(attribute, "expected `mode` or `skip`"));
+            if config.name == "extras" {
+                if extras.is_some() {
+                    return Err(Error::new_spanned(
+                        attribute,
+                        "`extras` can be specified only once",
+                    ));
+                }
+                extras = config.extras;
+                return Ok(());
             }
-            let pattern = config.pattern.expect("skip attribute has a pattern");
-            if config.rule.converter.is_some() {
+            if config.name != "skip" {
                 return Err(Error::new_spanned(
                     attribute,
-                    "a `skip` rule emits no token, thus it cannot have `with`",
+                    "expected `extras`, `mode`, or `skip`",
                 ));
             }
+            let pattern = config.pattern.expect("skip attribute has a pattern");
+            let spec = match config.rule.converter {
+                Some(Converter::Text(_)) => {
+                    return Err(Error::new_spanned(
+                        attribute,
+                        "a `skip` rule emits no token, thus it cannot have `with`",
+                    ));
+                }
+                Some(Converter::Scanner(converter)) => RuleSpec::emit(
+                    pattern.value(),
+                    quote! {
+                        #runtime::payload::PayloadResult::<()>::into_payload(
+                            (#converter)(scanner),
+                        )
+                        .map(|()| None)
+                    },
+                ),
+                None => RuleSpec::skip(pattern.value()),
+            };
             rules.push(rule_spec(
-                RuleSpec::skip(pattern.value()),
+                spec,
                 &config.rule.modes,
                 &config.rule.mode_action,
             ));
@@ -234,6 +281,7 @@ fn lexer_attributes(attributes: &[syn::Attribute]) -> Result<LexerConfig> {
             Ok(())
         })?;
     Ok(LexerConfig {
+        extras: extras.unwrap_or_else(|| syn::parse_quote!(())),
         modes,
         rules,
         patterns,
@@ -253,6 +301,7 @@ fn runtime_path() -> proc_macro2::TokenStream {
 
 struct LexerAttribute {
     name: String,
+    extras: Option<Type>,
     mode: Option<String>,
     pattern: Option<LitStr>,
     rule: RuleConfig,
@@ -261,7 +310,12 @@ struct LexerAttribute {
 struct RuleConfig {
     modes: Vec<String>,
     mode_action: ModeAction,
-    converter: Option<Expr>,
+    converter: Option<Converter>,
+}
+
+enum Converter {
+    Text(Expr),
+    Scanner(Expr),
 }
 
 impl Parse for LexerAttribute {
@@ -275,7 +329,21 @@ impl Parse for LexerAttribute {
             }
             return Ok(Self {
                 name: name.to_string(),
+                extras: None,
                 mode: Some(mode.to_string()),
+                pattern: None,
+                rule: RuleConfig::stay(),
+            });
+        }
+        if name == "extras" {
+            let extras = input.parse()?;
+            if !input.is_empty() {
+                return Err(input.error("unexpected lexer extras attribute content"));
+            }
+            return Ok(Self {
+                name: name.to_string(),
+                extras: Some(extras),
+                mode: None,
                 pattern: None,
                 rule: RuleConfig::stay(),
             });
@@ -284,6 +352,7 @@ impl Parse for LexerAttribute {
         let rule = parse_rule_modifiers(input)?;
         Ok(Self {
             name: name.to_string(),
+            extras: None,
             mode: None,
             pattern: Some(pattern),
             rule,
@@ -343,16 +412,23 @@ fn parse_rule_modifiers(input: ParseStream<'_>) -> Result<RuleConfig> {
                 input.parse::<syn::Token![=]>()?;
                 config.mode_action = ModeAction::Begin(input.parse::<syn::Ident>()?.to_string());
             }
-            "with" => {
+            "with" | "with_scanner" => {
                 if has_converter {
-                    return Err(Error::new_spanned(
-                        name,
-                        "`with` can be specified only once",
-                    ));
+                    let message = if name == "with" {
+                        "`with` can be specified only once"
+                    } else {
+                        "a lexer rule can have only one converter"
+                    };
+                    return Err(Error::new_spanned(name, message));
                 }
                 has_converter = true;
                 input.parse::<syn::Token![=]>()?;
-                config.converter = Some(input.parse()?);
+                let converter = input.parse()?;
+                config.converter = Some(if name == "with" {
+                    Converter::Text(converter)
+                } else {
+                    Converter::Scanner(converter)
+                });
             }
             "pop" => {
                 if has_mode_action {
@@ -367,7 +443,7 @@ fn parse_rule_modifiers(input: ParseStream<'_>) -> Result<RuleConfig> {
             _ => {
                 return Err(Error::new_spanned(
                     name,
-                    "expected `modes`, `with`, `push`, `begin`, or `pop`",
+                    "expected `modes`, `with`, `with_scanner`, `push`, `begin`, or `pop`",
                 ));
             }
         }
@@ -393,7 +469,7 @@ fn rule_spec(spec: RuleSpec, modes: &[String], mode_action: &ModeAction) -> Rule
 
 struct RuleAttribute {
     pattern: LitStr,
-    converter: Option<Expr>,
+    converter: Option<Converter>,
     modes: Vec<String>,
     mode_action: ModeAction,
 }
