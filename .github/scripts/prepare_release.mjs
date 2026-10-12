@@ -49,6 +49,18 @@ function versionsEqual(left, right) {
   return compareVersions(left, right) === 0;
 }
 
+export function selectNextVersion(previousVersion, change, override = "") {
+  if (override === "") return bumpVersion(previousVersion, change);
+
+  const version = parseVersion(override);
+  if (compareVersions(version, previousVersion) <= 0) {
+    throw new Error(
+      `override version ${override} must be newer than ${formatVersion(previousVersion)}`,
+    );
+  }
+  return version;
+}
+
 function git(...arguments_) {
   return execFileSync("git", arguments_, { cwd: ROOT, encoding: "utf8" }).trim();
 }
@@ -136,16 +148,24 @@ function applyVersion(version) {
   }
 }
 
-function determineRelease() {
+function determineRelease(override = "") {
   const manifestVersion = currentVersion();
   const previous = latestReleaseTag();
   if (previous === null) {
-    return { version: manifestVersion, change: "initial", previousTag: "", mode: "new" };
+    return {
+      version: override === "" ? manifestVersion : parseVersion(override),
+      change: "initial",
+      previousTag: "",
+      mode: "new",
+    };
   }
 
   const taggedCommit = git("rev-list", "-n", "1", previous.tag);
   const headCommit = git("rev-parse", "HEAD");
   if (taggedCommit === headCommit) {
+    if (override !== "" && !versionsEqual(parseVersion(override), previous.version)) {
+      throw new Error(`cannot override the version when resuming release ${previous.tag}`);
+    }
     if (!versionsEqual(manifestVersion, previous.version)) {
       throw new Error(
         `${previous.tag} points at HEAD but the manifest is ${formatVersion(manifestVersion)}`,
@@ -171,7 +191,7 @@ function determineRelease() {
     );
   }
   return {
-    version: bumpVersion(previous.version, change),
+    version: selectNextVersion(previous.version, change, override),
     change,
     previousTag: previous.tag,
     mode: "new",
@@ -180,7 +200,7 @@ function determineRelease() {
 
 function main() {
   const checkOnly = process.argv.slice(2).includes("--check");
-  const release = determineRelease();
+  const release = determineRelease(process.env.NEXT_VERSION ?? "");
   if (!checkOnly && release.mode === "new") applyVersion(release.version);
 
   const version = formatVersion(release.version);

@@ -2,6 +2,11 @@ name: Release
 
 on:
   workflow_dispatch:
+    inputs:
+      next_version:
+        description: Optional next version (for example, 1.2.3)
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -37,6 +42,8 @@ jobs:
 
       - name: Prepare release
         id: release
+        env:
+          NEXT_VERSION: ${{ inputs.next_version }}
         run: node .github/scripts/prepare_release.mjs >> "$GITHUB_OUTPUT"
 
       - name: Update lockfile
