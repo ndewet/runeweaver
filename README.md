@@ -167,6 +167,22 @@ A failed `FromStr` or converter becomes `ScanError::InvalidPayload`. The
 scan consumes that lexeme, reports its span, and continues with subsequent
 input.
 
+A `&str` payload borrows the matched text from the scanner input:
+
+```rust
+use runeweaver::Lexer;
+
+#[derive(Debug, PartialEq, Lexer)]
+enum Token<'input> {
+    #[token("[a-z]+")]
+    Word(&'input str),
+}
+
+let token = Token::scan("word").next().expect("one token")?;
+assert_eq!(token, Token::Word("word"));
+# Ok::<(), runeweaver::ScanError>(())
+```
+
 Use `with_scanner` when conversion needs scan state. Declare the state type
 with `extras`, then supply its initial value with `scan_with_extras`:
 

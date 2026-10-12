@@ -7,9 +7,9 @@ use runeweaver::{Lexer, ScanError, Scanner, Span, Spanned};
 use std::convert::Infallible;
 use std::str::FromStr;
 
-fn first<T: Lexer>(input: &str) -> Option<(T, usize)>
+fn first<'input, T: Lexer<'input>>(input: &'input str) -> Option<(T, usize)>
 where
-    T::Extras: Default,
+    <T as Automaton<'input>>::Extras: Default,
 {
     T::scan(input)
         .spanned()
@@ -70,15 +70,15 @@ fn stay<T>(token: Option<T>) -> RuleOutput<T> {
 
 type GeneratedMatch<T> = Result<(RuleOutput<T>, usize, usize), (ScanError, usize, usize)>;
 
-fn generated_match<T: Automaton + InspectAutomaton>(
-    input: &str,
+fn generated_match<'input, T: Automaton<'input> + InspectAutomaton>(
+    input: &'input str,
     mode: usize,
 ) -> Option<GeneratedMatch<T>>
 where
-    T::Extras: Default,
+    <T as Automaton<'input>>::Extras: Default,
 {
     T::start_state(mode)?;
-    let mut scanner = Scanner::<T, T::Extras>::new(input);
+    let mut scanner = Scanner::<T, <T as Automaton<'input>>::Extras>::new(input);
     match T::next_token(&mut scanner, mode) {
         Some(Ok((token, mode_action))) => Some(Ok((
             RuleOutput { token, mode_action },
@@ -765,6 +765,46 @@ fn a_converter_returns_a_payload_or_a_result() {
             message: "a question is not a value".to_owned(),
         }))
     );
+}
+
+#[derive(Debug, PartialEq, Lexer)]
+#[lexer(extras = usize)]
+#[lexer(skip = r"\s+")]
+enum BorrowedToken<'input> {
+    #[token("[a-z]+")]
+    Word(&'input str),
+    #[token("[0-9]+", with = borrow_text)]
+    Number(&'input str),
+    #[token("[A-Z]+", with_scanner = borrow_and_count)]
+    Upper(&'input str),
+}
+
+fn borrow_text(text: &str) -> &str {
+    text
+}
+
+fn borrow_and_count<'input>(
+    scanner: &mut Scanner<'input, BorrowedToken<'input>, usize>,
+) -> &'input str {
+    scanner.extras += 1;
+    scanner.slice()
+}
+
+#[test]
+fn token_payloads_can_borrow_the_matched_text() {
+    let input = String::from("word 42 ABC");
+    let mut scanner = BorrowedToken::scan(&input);
+    let tokens = scanner.by_ref().collect::<Result<Vec<_>, _>>();
+
+    assert_eq!(
+        tokens,
+        Ok(vec![
+            BorrowedToken::Word("word"),
+            BorrowedToken::Number("42"),
+            BorrowedToken::Upper("ABC")
+        ])
+    );
+    assert_eq!(scanner.extras, 1);
 }
 
 #[derive(Debug, PartialEq, Lexer)]
