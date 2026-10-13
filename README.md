@@ -104,10 +104,6 @@ through 255 names one byte. Character classes use this byte alphabet.
 The scanner preserves borrowed slices, extras, callbacks, modes, and spans.
 Owned byte payloads require a converter. The text converter receives `&[u8]`.
 
-The runtime supports `no_std`. Default features enable `alloc` and `derive`.
-Disable default features to use spans and source operations without an
-allocator. Enable `alloc` for the scanner and payload interfaces.
-
 ## Matching semantics
 
 Rules are anchored at the scan's current position. The rule that consumes
