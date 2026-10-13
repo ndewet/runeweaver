@@ -110,13 +110,10 @@ pub(crate) fn emit(
         let name = mode.name();
         quote!(#index => #name,)
     });
-    let (scanner_generics, scanner_extras) = if uses_scanner {
-        (
-            quote!(),
-            quote!(<Self as #lexer_runtime::Automaton>::Extras),
-        )
+    let scanner_extras = if uses_scanner {
+        quote!(<Self as #lexer_runtime::Automaton>::Extras)
     } else {
-        (quote!(<Extras>), quote!(Extras))
+        quote!(impl Sized)
     };
 
     // The UTF-8 DFA accepts complete codepoints, so selected lengths end at character boundaries.
@@ -149,7 +146,7 @@ pub(crate) fn emit(
         #selector
 
         #[inline(always)]
-        fn __runeweaver_next #scanner_generics(
+        fn __runeweaver_next(
             scanner: &mut #runtime::Scanner<'_, Self, #scanner_extras>,
             mode: usize,
         ) -> Option<#lexer_runtime::ScanMatch<Self>> {
@@ -202,7 +199,7 @@ pub(crate) fn emit(
         }
 
         #[cfg(test)]
-        fn __runeweaver_action #scanner_generics(
+        fn __runeweaver_action(
             rule: usize,
             text: &str,
             scanner: &mut #runtime::Scanner<'_, Self, #scanner_extras>,
@@ -274,7 +271,7 @@ mod tests {
         assert!(actual.contains("fn __runeweaver_transition"));
         assert!(actual.contains("fn __runeweaver_accept"));
         assert!(actual.contains("fn __runeweaver_select"));
-        assert!(actual.contains("Scanner < '_ , Self , Extras >"));
+        assert!(actual.contains("Scanner < '_ , Self , impl Sized >"));
         assert!(!actual.contains("__runeweaver_select_spanned"));
     }
 
