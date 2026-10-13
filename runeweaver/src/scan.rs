@@ -197,6 +197,7 @@ impl<'input, T, Extras> Scanner<'input, T, Extras> {
     ///
     /// assert_eq!(Token::scan("word").source(), "word");
     /// ```
+    #[inline(always)]
     pub const fn source(&self) -> &'input str {
         self.input
     }
@@ -223,6 +224,7 @@ impl<'input, T, Extras> Scanner<'input, T, Extras> {
     }
 
     /// Returns the byte offset at which the next scan starts.
+    #[inline(always)]
     pub const fn position(&self) -> usize {
         self.offset
     }
@@ -270,7 +272,7 @@ impl<'input, T, Extras> Scanner<'input, T, Extras> {
     #[doc(hidden)]
     #[inline(always)]
     pub fn __set_position(&mut self, position: usize) {
-        assert!(
+        debug_assert!(
             position <= self.input.len() && self.input.is_char_boundary(position),
             "invalid scanner position"
         );
@@ -280,7 +282,7 @@ impl<'input, T, Extras> Scanner<'input, T, Extras> {
     #[doc(hidden)]
     #[inline(always)]
     pub fn __set_match(&mut self, start: usize, end: usize) {
-        assert!(
+        debug_assert!(
             start <= end
                 && end <= self.input.len()
                 && self.input.is_char_boundary(start)
@@ -310,6 +312,7 @@ impl<'input, T, Extras> Scanner<'input, T, Extras> {
     /// let _ = scan.next();
     /// assert_eq!(scan.span(), Span::new(0, 4));
     /// ```
+    #[inline(always)]
     pub const fn span(&self) -> Span {
         self.span
     }
