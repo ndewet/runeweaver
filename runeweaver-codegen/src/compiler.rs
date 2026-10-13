@@ -6,7 +6,7 @@
 
 use crate::automata::{
     BuildError, dfa,
-    encoding::{ByteRange, Bytes, Utf8},
+    encoding::{ByteRange, Bytes, Encoding, Utf8},
     nfa,
 };
 use crate::emitter;
@@ -268,19 +268,15 @@ impl LexerDefinition {
     /// # Panics
     ///
     /// Panics if a rule enables a mode that this lexer does not define.
-    fn compile_automaton(
+    fn compile_automaton<E: Encoding<Label = ByteRange>>(
         &self,
-        source_kind: SourceKind,
+        encoding: &E,
     ) -> Result<dfa::Dfa<ByteRange, RuleId>, CompileError> {
         let mut builder = nfa::Builder::new();
         let starts: Vec<_> = self.modes.iter().map(|_| builder.add_state()).collect();
 
         for (index, rule) in self.rules.iter().enumerate() {
-            let fragment = if source_kind == SourceKind::Bytes {
-                nfa::thompson::fragment(&rule.pattern, &Bytes, &mut builder)
-            } else {
-                nfa::thompson::fragment(&rule.pattern, &Utf8, &mut builder)
-            };
+            let fragment = nfa::thompson::fragment(&rule.pattern, encoding, &mut builder);
             for mode in &rule.modes {
                 let start = starts.get(mode.index()).unwrap_or_else(|| {
                     panic!(
@@ -323,7 +319,10 @@ impl LexerDefinition {
 
     /// Emits this lexer as one private matcher method.
     fn emit(&self, options: &CompileOptions) -> Result<TokenStream, CompileError> {
-        let dfa = self.compile_automaton(options.source_kind)?;
+        let dfa = match options.source_kind {
+            SourceKind::Str => self.compile_automaton(&Utf8),
+            SourceKind::Bytes => self.compile_automaton(&Bytes),
+        }?;
         let fused_skips = self.rules().iter().enumerate().filter_map(|(index, rule)| {
             (rule.action().is_skip() && matches!(rule.mode_action(), ResolvedModeAction::Stay))
                 .then_some(index)
