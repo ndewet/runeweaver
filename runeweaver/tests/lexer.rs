@@ -797,6 +797,21 @@ fn borrow_text(text: &str) -> &str {
     text
 }
 
+#[derive(Debug, PartialEq, Lexer)]
+enum SourceNamedToken<'__runeweaver_source> {
+    #[token("[a-z]+")]
+    Word(&'__runeweaver_source str),
+}
+
+#[test]
+fn borrowed_payloads_do_not_shadow_declared_source_lifetimes() {
+    let input = String::from("word");
+    assert_eq!(
+        SourceNamedToken::scan(&input).next(),
+        Some(Ok(SourceNamedToken::Word("word"))),
+    );
+}
+
 fn borrow_and_count<'input>(
     scanner: &mut Scanner<'input, BorrowedToken<'input>, usize>,
 ) -> &'input str {
