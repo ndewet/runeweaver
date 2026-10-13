@@ -270,13 +270,13 @@ impl LexerDefinition {
     /// Panics if a rule enables a mode that this lexer does not define.
     fn compile_automaton(
         &self,
-        byte_source: bool,
+        source_kind: SourceKind,
     ) -> Result<dfa::Dfa<ByteRange, RuleId>, CompileError> {
         let mut builder = nfa::Builder::new();
         let starts: Vec<_> = self.modes.iter().map(|_| builder.add_state()).collect();
 
         for (index, rule) in self.rules.iter().enumerate() {
-            let fragment = if byte_source {
+            let fragment = if source_kind == SourceKind::Bytes {
                 nfa::thompson::fragment(&rule.pattern, &Bytes, &mut builder)
             } else {
                 nfa::thompson::fragment(&rule.pattern, &Utf8, &mut builder)
@@ -322,35 +322,14 @@ impl LexerDefinition {
     }
 
     /// Emits this lexer as one private matcher method.
-    fn emit(
-        &self,
-        runtime: &TokenStream,
-        extras: &TokenStream,
-        source: &SourceLifetime,
-        uses_scanner: bool,
-        uses_source: bool,
-        byte_source: bool,
-    ) -> Result<TokenStream, CompileError> {
-        let dfa = self.compile_automaton(byte_source)?;
+    fn emit(&self, options: &CompileOptions) -> Result<TokenStream, CompileError> {
+        let dfa = self.compile_automaton(options.source_kind)?;
         let fused_skips = self.rules().iter().enumerate().filter_map(|(index, rule)| {
             (rule.action().is_skip() && matches!(rule.mode_action(), ResolvedModeAction::Stay))
                 .then_some(index)
         });
         let matcher = crate::ir::Matcher::new(&dfa, fused_skips);
-        Ok(emitter::emit(
-            &dfa,
-            &matcher,
-            self,
-            emitter::EmitOptions {
-                runtime,
-                extras,
-                source_lifetime: &source.lifetime,
-                source_bounds: &source.bounds,
-                uses_scanner,
-                uses_source,
-                byte_source,
-            },
-        ))
+        Ok(emitter::emit(&dfa, &matcher, self, options))
     }
 }
 
@@ -437,7 +416,52 @@ pub struct SourceLifetime {
     pub bounds: TokenStream,
 }
 
-/// Builds a lexer with a declared scanner state type.
+/// Selects the source representation and its pattern encoding.
+#[doc(hidden)]
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum SourceKind {
+    /// UTF-8 strings.
+    Str,
+    /// Raw bytes.
+    Bytes,
+}
+
+impl SourceKind {
+    /// Returns the source type used in generated scanner signatures.
+    pub fn source_type(self) -> TokenStream {
+        match self {
+            Self::Str => quote!(str),
+            Self::Bytes => quote!([u8]),
+        }
+    }
+
+    /// Returns an explicit source parameter for byte scanners.
+    pub fn type_argument(self) -> TokenStream {
+        match self {
+            Self::Str => quote!(),
+            Self::Bytes => quote!(, [u8]),
+        }
+    }
+}
+
+/// Configures the generated scanner methods.
+#[doc(hidden)]
+pub struct CompileOptions {
+    /// Runtime crate path.
+    pub runtime: TokenStream,
+    /// Scanner state type.
+    pub extras: TokenStream,
+    /// Input lifetime and bounds.
+    pub source: SourceLifetime,
+    /// Input representation.
+    pub source_kind: SourceKind,
+    /// Whether actions use scanner state.
+    pub uses_scanner: bool,
+    /// Whether tokens borrow the input.
+    pub uses_source: bool,
+}
+
+/// Builds a string lexer with a declared scanner state type.
 #[doc(hidden)]
 pub fn compile_with_modes_and_extras_at(
     runtime: TokenStream,
@@ -449,50 +473,25 @@ pub fn compile_with_modes_and_extras_at(
     uses_source: bool,
 ) -> Result<TokenStream, CompileError> {
     compile_for_source(
-        runtime,
-        extras,
-        source,
+        CompileOptions {
+            runtime,
+            extras,
+            source,
+            source_kind: SourceKind::Str,
+            uses_scanner,
+            uses_source,
+        },
         modes,
         specifications,
-        uses_scanner,
-        uses_source,
-        false,
     )
 }
 
-/// Builds a lexer whose source is a raw byte slice.
+/// Builds a lexer for the configured source representation.
 #[doc(hidden)]
-pub fn compile_bytes_with_modes_and_extras_at(
-    runtime: TokenStream,
-    extras: TokenStream,
-    source: SourceLifetime,
+pub fn compile_for_source(
+    options: CompileOptions,
     modes: Vec<String>,
     specifications: Vec<RuleSpec>,
-    uses_scanner: bool,
-    uses_source: bool,
-) -> Result<TokenStream, CompileError> {
-    compile_for_source(
-        runtime,
-        extras,
-        source,
-        modes,
-        specifications,
-        uses_scanner,
-        uses_source,
-        true,
-    )
-}
-
-#[allow(clippy::too_many_arguments)]
-fn compile_for_source(
-    runtime: TokenStream,
-    extras: TokenStream,
-    source: SourceLifetime,
-    modes: Vec<String>,
-    specifications: Vec<RuleSpec>,
-    uses_scanner: bool,
-    uses_source: bool,
-    byte_source: bool,
 ) -> Result<TokenStream, CompileError> {
     let mut declared_modes = vec![Mode::new("INITIAL")];
     for mode in modes {
@@ -575,14 +574,7 @@ fn compile_for_source(
             rule_index: None,
         });
     }
-    LexerDefinition::new(rules, declared_modes).emit(
-        &runtime,
-        &extras,
-        &source,
-        uses_scanner,
-        uses_source,
-        byte_source,
-    )
+    LexerDefinition::new(rules, declared_modes).emit(&options)
 }
 
 #[cfg(test)]

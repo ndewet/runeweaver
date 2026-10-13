@@ -9,8 +9,7 @@ use proc_macro_crate::{FoundCrate, crate_name};
 use proc_macro2::{Ident, Span};
 use quote::quote;
 use runeweaver_codegen::{
-    ModeAction, RuleSpec, SourceLifetime, compile_bytes_with_modes_and_extras_at,
-    compile_with_modes_and_extras_at,
+    CompileOptions, ModeAction, RuleSpec, SourceKind, SourceLifetime, compile_for_source,
 };
 use syn::{
     Data, DeriveInput, Error, Expr, Fields, GenericParam, Lifetime, LifetimeParam, LitStr, Result,
@@ -104,7 +103,7 @@ fn derive_lexer_inner(input: DeriveInput) -> Result<proc_macro2::TokenStream> {
         mut rules,
         mut patterns,
         mut uses_scanner,
-        byte_source,
+        source_kind,
     } = lexer_attributes(&input.attrs, &runtime)?;
     for variant in data.variants {
         let attribute = rule_attribute(&variant.attrs, &variant.ident)?;
@@ -144,9 +143,7 @@ fn derive_lexer_inner(input: DeriveInput) -> Result<proc_macro2::TokenStream> {
                         )
                         .map(|payload| Some(Self::#variant_ident(payload)))
                     },
-                    None if (!byte_source && is_str_reference(payload_type))
-                        || (byte_source && is_byte_reference(payload_type)) =>
-                    {
+                    None if is_source_reference(payload_type, source_kind) => {
                         quote! {
                             Ok(Some(Self::#variant_ident(scanner.slice())))
                         }
@@ -157,7 +154,7 @@ fn derive_lexer_inner(input: DeriveInput) -> Result<proc_macro2::TokenStream> {
                             "a borrowed payload other than `&str` needs a converter",
                         ));
                     }
-                    None if byte_source => {
+                    None if source_kind == SourceKind::Bytes => {
                         return Err(Error::new_spanned(
                             field,
                             "a byte payload needs a converter unless it is `&[u8]`",
@@ -219,22 +216,20 @@ fn derive_lexer_inner(input: DeriveInput) -> Result<proc_macro2::TokenStream> {
         #(#source_lifetime: #declared_lifetimes,)*
         #reverse_source_bound
     );
-    let compile = if byte_source {
-        compile_bytes_with_modes_and_extras_at
-    } else {
-        compile_with_modes_and_extras_at
-    };
-    let matcher = compile(
-        runtime.clone(),
-        quote!(#extras),
-        SourceLifetime {
-            lifetime: quote!(#source_lifetime),
-            bounds: source_bounds,
+    let matcher = compile_for_source(
+        CompileOptions {
+            runtime: runtime.clone(),
+            extras: quote!(#extras),
+            source: SourceLifetime {
+                lifetime: quote!(#source_lifetime),
+                bounds: source_bounds,
+            },
+            source_kind,
+            uses_scanner,
+            uses_source,
         },
         modes,
         rules,
-        uses_scanner,
-        uses_source,
     )
     .map_err(|error| {
         error.rule_index().map_or_else(
@@ -266,7 +261,7 @@ fn derive_lexer_inner(input: DeriveInput) -> Result<proc_macro2::TokenStream> {
     }
     let (impl_generics, type_generics, where_clause) = input.generics.split_for_impl();
     let (automaton_impl_generics, _, automaton_where_clause) = automaton_generics.split_for_impl();
-    let source_type = byte_source.then(|| quote!(, [u8]));
+    let source_type = source_kind.type_argument();
     Ok(quote! {
         impl #impl_generics #ident #type_generics #where_clause {
             #matcher
@@ -292,20 +287,21 @@ fn derive_lexer_inner(input: DeriveInput) -> Result<proc_macro2::TokenStream> {
     })
 }
 
-fn is_str_reference(ty: &Type) -> bool {
+fn is_source_reference(ty: &Type, source_kind: SourceKind) -> bool {
     let Type::Reference(reference) = ty else {
         return false;
     };
-    reference.mutability.is_none()
-        && matches!(reference.elem.as_ref(), Type::Path(path) if path.path.is_ident("str"))
+    reference.mutability.is_none() && source_kind_of(&reference.elem) == Some(source_kind)
 }
 
-fn is_byte_reference(ty: &Type) -> bool {
-    let Type::Reference(reference) = ty else {
-        return false;
-    };
-    reference.mutability.is_none()
-        && matches!(reference.elem.as_ref(), Type::Slice(slice) if matches!(slice.elem.as_ref(), Type::Path(path) if path.path.is_ident("u8")))
+fn source_kind_of(ty: &Type) -> Option<SourceKind> {
+    match ty {
+        Type::Path(path) if path.path.is_ident("str") => Some(SourceKind::Str),
+        Type::Slice(slice) if matches!(slice.elem.as_ref(), Type::Path(path) if path.path.is_ident("u8")) => {
+            Some(SourceKind::Bytes)
+        }
+        _ => None,
+    }
 }
 
 struct LexerConfig {
@@ -314,7 +310,7 @@ struct LexerConfig {
     rules: Vec<RuleSpec>,
     patterns: Vec<LitStr>,
     uses_scanner: bool,
-    byte_source: bool,
+    source_kind: SourceKind,
 }
 
 fn lexer_attributes(
@@ -333,13 +329,17 @@ fn lexer_attributes(
         .try_for_each(|attribute| {
             let config: LexerAttribute = attribute.parse_args()?;
             if config.name == "source" {
-                if source.is_some() { return Err(Error::new_spanned(attribute, "`source` can be specified only once")); }
+                if source.is_some() {
+                    return Err(Error::new_spanned(
+                        attribute,
+                        "`source` can be specified only once",
+                    ));
+                }
                 let ty = config.extras.expect("the source option has a type");
-                source = Some(match &ty {
-                    Type::Path(path) if path.path.is_ident("str") => false,
-                    Type::Slice(slice) if matches!(slice.elem.as_ref(), Type::Path(path) if path.path.is_ident("u8")) => true,
-                    _ => return Err(Error::new_spanned(ty, "the source must be `str` or `[u8]`")),
-                });
+                source =
+                    Some(source_kind_of(&ty).ok_or_else(|| {
+                        Error::new_spanned(ty, "the source must be `str` or `[u8]`")
+                    })?);
                 return Ok(());
             }
             if config.name == "mode" {
@@ -401,7 +401,7 @@ fn lexer_attributes(
         rules,
         patterns,
         uses_scanner,
-        byte_source: source.unwrap_or(false),
+        source_kind: source.unwrap_or(SourceKind::Str),
     })
 }
 

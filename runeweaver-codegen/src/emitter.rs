@@ -1,20 +1,12 @@
 //! Renders completed lexer execution plans as Rust source.
 
 use crate::automata::{StateId, dfa::Dfa, encoding::ByteRange};
-use crate::compiler::{LexerDefinition, ResolvedModeAction, RuleId};
+use crate::compiler::{
+    CompileOptions, LexerDefinition, ResolvedModeAction, RuleId, SourceKind, SourceLifetime,
+};
 use crate::ir::Matcher;
 use proc_macro2::TokenStream;
 use quote::quote;
-
-pub(crate) struct EmitOptions<'a> {
-    pub runtime: &'a TokenStream,
-    pub extras: &'a TokenStream,
-    pub source_lifetime: &'a TokenStream,
-    pub source_bounds: &'a TokenStream,
-    pub uses_scanner: bool,
-    pub uses_source: bool,
-    pub byte_source: bool,
-}
 
 fn mode_action(action: ResolvedModeAction, lexer_runtime: &TokenStream) -> TokenStream {
     match action {
@@ -58,17 +50,21 @@ pub(crate) fn emit(
     dfa: &Dfa<ByteRange, RuleId>,
     matcher: &Matcher,
     lexer: &LexerDefinition,
-    options: EmitOptions<'_>,
+    options: &CompileOptions,
 ) -> TokenStream {
-    let EmitOptions {
+    let CompileOptions {
         runtime,
         extras,
-        source_lifetime,
-        source_bounds,
+        source,
         uses_scanner,
         uses_source,
-        byte_source,
+        source_kind,
     } = options;
+    let SourceLifetime {
+        lifetime: source_lifetime,
+        bounds: source_bounds,
+    } = source;
+    let (uses_scanner, uses_source, source_kind) = (*uses_scanner, *uses_source, *source_kind);
     let lexer_runtime = quote!(#runtime::lexer);
     let payload_runtime = quote!(#runtime::payload);
     let starts: Vec<_> = dfa
@@ -141,7 +137,7 @@ pub(crate) fn emit(
     let scanner_extras = uses_scanner
         .then_some(extras)
         .map_or_else(|| quote!(impl Sized), |extras| quote!(#extras));
-    let source_type = byte_source.then(|| quote!(, [u8]));
+    let source_type = source_kind.type_argument();
     let scanner_bounds = uses_source.then(|| {
         quote! {
             where
@@ -149,23 +145,14 @@ pub(crate) fn emit(
                 #source_bounds
         }
     });
-    let action_text = if byte_source {
-        if uses_source {
-            quote!(&#source_lifetime [u8])
-        } else {
-            quote!(&[u8])
-        }
-    } else if uses_source {
-        quote!(&#source_lifetime str)
-    } else {
-        quote!(&str)
-    };
-    let input_bytes = if byte_source {
+    let input_type = source_kind.source_type();
+    let action_text = quote!(&#source_lifetime #input_type);
+    let input_bytes = if source_kind == SourceKind::Bytes {
         quote!(input)
     } else {
         quote!(input.as_bytes())
     };
-    let error_length = if byte_source {
+    let error_length = if source_kind == SourceKind::Bytes {
         quote!(1)
     } else {
         quote!(
@@ -304,14 +291,16 @@ mod tests {
             dfa,
             &Matcher::new(dfa, []),
             lexer,
-            EmitOptions {
-                runtime,
-                extras: &extras,
-                source_lifetime: &source_lifetime,
-                source_bounds: &source_bounds,
+            &CompileOptions {
+                runtime: runtime.clone(),
+                extras,
+                source: SourceLifetime {
+                    lifetime: source_lifetime,
+                    bounds: source_bounds,
+                },
                 uses_scanner: false,
                 uses_source: false,
-                byte_source: false,
+                source_kind: SourceKind::Str,
             },
         )
     }

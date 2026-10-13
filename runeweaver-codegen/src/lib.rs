@@ -19,7 +19,7 @@ mod selector;
 mod specification;
 
 pub use compiler::{
-    CompileError, SourceLifetime, compile, compile_bytes_with_modes_and_extras_at,
+    CompileError, CompileOptions, SourceKind, SourceLifetime, compile, compile_for_source,
     compile_with_modes, compile_with_modes_and_extras_at, compile_with_modes_at,
 };
 pub use specification::{ModeAction, RuleSpec};
