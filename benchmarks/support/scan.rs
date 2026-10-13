@@ -13,6 +13,8 @@ fn input(source: &str) -> String {
     source.repeat(repetitions)
 }
 
+// Keep the complete scan separate from Criterion's iteration loop.
+#[inline(never)]
 fn scan<T: Lexer>(input: &str) -> usize {
     T::scan(black_box(input))
         .try_fold(0usize, |count, result| result.map(|_| count + 1))
