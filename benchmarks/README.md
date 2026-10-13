@@ -16,9 +16,9 @@ that take several milliseconds. The pull request job has a 15-minute limit.
 CI uses one code generation unit and thin LTO. These settings prevent unrelated
 type changes from repartitioning or relinking benchmark hot paths.
 
-CI checks out the pull request base revision into a separate directory. It
-copies the pull request benchmark suite there before it builds either revision.
-Thus, both revisions use identical benchmark code on one runner.
+CI checks out and builds the pull request base revision in a separate directory.
+Each revision uses its matching benchmark suite, so API changes remain
+compatible with their benchmark adapters.
 
 Each case has a separate benchmark executable. CI removes build metadata from
 each executable and compares both revisions. It measures only the cases whose
@@ -76,5 +76,5 @@ descriptive benchmark identifiers because CI uses them to match both revisions.
 Use deterministic inputs that represent a documented operation. Make each
 iteration do enough work to reduce timer overhead without hiding relevant costs.
 
-The complete suite must compile against the base revision. Add a benchmark for
-a new API after that API is present in the base revision.
+Keep benchmark names stable across API changes. CI matches base and pull request
+executables by target name.

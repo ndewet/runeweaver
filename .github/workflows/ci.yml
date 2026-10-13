@@ -137,10 +137,6 @@ jobs:
           ref: ${{ github.event.pull_request.base.sha }}
           path: .benchmark-source
 
-      - name: Use the same benchmark suite for both revisions
-        if: steps.benchmark-changes.outputs.run == 'true'
-        run: rsync --archive --delete benchmarks/ .benchmark-source/benchmarks/
-
       - name: Build the base benchmarks
         if: steps.benchmark-changes.outputs.run == 'true'
         run: |
