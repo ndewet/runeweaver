@@ -3,8 +3,9 @@
 use crate::lexer::ModeAction;
 use crate::payload::PayloadError;
 use crate::{Lexer, Span, Spanned};
-use std::fmt::{Display, Formatter};
-use std::marker::PhantomData;
+use alloc::{string::String, vec::Vec};
+use core::fmt::{Display, Formatter};
+use core::marker::PhantomData;
 
 /// An error encountered while scanning input.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -79,7 +80,7 @@ impl ScanError {
 }
 
 impl Display for ScanError {
-    fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> core::fmt::Result {
         match self {
             Self::Unrecognized { span } => write!(formatter, "unrecognized input at {span}"),
             Self::InvalidPayload { span, message } => {
@@ -92,7 +93,7 @@ impl Display for ScanError {
     }
 }
 
-impl std::error::Error for ScanError {}
+impl core::error::Error for ScanError {}
 
 /// Holds the mutable state for one scan of an input string.
 ///

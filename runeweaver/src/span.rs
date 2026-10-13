@@ -1,6 +1,6 @@
 //! Locates a lexeme in the input by byte offset.
 
-use std::{fmt, ops::Range};
+use core::{fmt, ops::Range};
 
 /// A half-open range of UTF-8 byte offsets.
 ///
