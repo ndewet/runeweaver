@@ -315,14 +315,14 @@ impl LexerDefinition {
     }
 
     /// Emits this lexer as one private matcher method.
-    fn emit(&self, runtime: &TokenStream) -> Result<TokenStream, CompileError> {
+    fn emit(&self, runtime: &TokenStream, uses_scanner: bool) -> Result<TokenStream, CompileError> {
         let dfa = self.compile_automaton()?;
         let fused_skips = self.rules().iter().enumerate().filter_map(|(index, rule)| {
             (rule.action().is_skip() && matches!(rule.mode_action(), ResolvedModeAction::Stay))
                 .then_some(index)
         });
         let matcher = crate::ir::Matcher::new(&dfa, fused_skips);
-        Ok(emitter::emit(&dfa, &matcher, self, runtime))
+        Ok(emitter::emit(&dfa, &matcher, self, runtime, uses_scanner))
     }
 }
 
@@ -388,6 +388,25 @@ pub fn compile_with_modes_at(
     runtime: TokenStream,
     modes: Vec<String>,
     specifications: Vec<RuleSpec>,
+) -> Result<TokenStream, CompileError> {
+    compile_with_modes_at_inner(runtime, modes, specifications, false)
+}
+
+/// Builds a lexer whose actions can receive its scanner.
+#[doc(hidden)]
+pub fn compile_with_modes_and_scanner_at(
+    runtime: TokenStream,
+    modes: Vec<String>,
+    specifications: Vec<RuleSpec>,
+) -> Result<TokenStream, CompileError> {
+    compile_with_modes_at_inner(runtime, modes, specifications, true)
+}
+
+fn compile_with_modes_at_inner(
+    runtime: TokenStream,
+    modes: Vec<String>,
+    specifications: Vec<RuleSpec>,
+    uses_scanner: bool,
 ) -> Result<TokenStream, CompileError> {
     let mut declared_modes = vec![Mode::new("INITIAL")];
     for mode in modes {
@@ -470,7 +489,7 @@ pub fn compile_with_modes_at(
             rule_index: None,
         });
     }
-    LexerDefinition::new(rules, declared_modes).emit(&runtime)
+    LexerDefinition::new(rules, declared_modes).emit(&runtime, uses_scanner)
 }
 
 #[cfg(test)]
