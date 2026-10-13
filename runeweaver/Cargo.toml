@@ -19,8 +19,9 @@ name = "runeweaver"
 runeweaver-derive = { version = "=0.2.0", path = "../runeweaver-derive", optional = true }
 
 [features]
-default = ["derive"]
-derive = ["dep:runeweaver-derive"]
+default = ["derive", "alloc"]
+derive = ["dep:runeweaver-derive", "alloc"]
+alloc = []
 
 [lints]
 workspace = true
