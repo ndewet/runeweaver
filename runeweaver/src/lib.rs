@@ -4,7 +4,7 @@
 //! attribute on each variant.
 //!
 //! The scanner uses `core` and `alloc`. Disable default features to use the
-//! byte matcher and spans without an allocator. The `derive` feature enables
+//! spans and source operations without an allocator. The `derive` feature enables
 //! the macro and allocation support.
 
 #![deny(dead_code)]
@@ -18,7 +18,6 @@ extern crate self as runeweaver;
 #[cfg(feature = "derive")]
 pub use runeweaver_derive::Lexer;
 
-pub mod bytes;
 #[doc(hidden)]
 #[cfg(feature = "alloc")]
 pub mod lexer;

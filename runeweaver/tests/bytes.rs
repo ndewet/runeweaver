@@ -1,6 +1,6 @@
-//! Checks native byte scanning and shared byte matching.
+//! Checks native byte scanning.
 
-use runeweaver::{ByteScanner, Lexer, ScanError, Span, bytes::ByteMatcher};
+use runeweaver::{ByteScanner, Lexer, ScanError, Span};
 
 #[derive(Debug, PartialEq, Lexer)]
 #[lexer(source = [u8])]
@@ -124,44 +124,6 @@ fn byte_payload_errors_apply_mode_actions_and_scanning_continues() {
     );
     assert_eq!(scanner.next(), Some(Ok(Fallible::A)));
     assert_eq!(scanner.next(), None);
-}
-
-struct Prefix;
-impl ByteMatcher for Prefix {
-    fn start() -> usize {
-        0
-    }
-    fn transition(state: usize, byte: u8) -> Option<usize> {
-        match (state, byte) {
-            (0, b'a') => Some(1),
-            (1 | 2, b'b') => Some(2),
-            (2, b'c') => Some(3),
-            _ => None,
-        }
-    }
-    fn accept(state: usize) -> Option<usize> {
-        match state {
-            1 => Some(0),
-            3 => Some(1),
-            _ => None,
-        }
-    }
-}
-
-#[test]
-fn shared_matching_preserves_the_last_accept_and_the_failed_prefix() {
-    let matched = Prefix::match_bytes(b"abb!");
-    assert_eq!(matched.rule, Some(0));
-    assert_eq!(matched.end, 1);
-    assert_eq!(matched.traversed, 3);
-    let matched = Prefix::match_source(|offset| b"!abbc!".get(offset).copied(), 1);
-    assert_eq!(matched.rule, Some(1));
-    assert_eq!(matched.end, 5);
-    let matched = Prefix::match_bytes(b"!");
-    assert_eq!(matched.rule, None);
-    assert_eq!(matched.end, 0);
-    assert_eq!(matched.traversed, 0);
-    assert_eq!(Prefix::match_bytes(b"").rule, None);
 }
 
 #[test]

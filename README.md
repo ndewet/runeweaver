@@ -104,12 +104,8 @@ through 255 names one byte. Character classes use this byte alphabet.
 The scanner preserves borrowed slices, extras, callbacks, modes, and spans.
 Owned byte payloads require a converter. The text converter receives `&[u8]`.
 
-`runeweaver::bytes::ByteMatcher` executes a DFA over bytes or a custom byte
-reader. It reports the last accepted prefix and the traversed range. An
-adapter can select priorities and its own error recovery policy.
-
 The runtime supports `no_std`. Default features enable `alloc` and `derive`.
-Disable default features to use the byte matcher and spans without an
+Disable default features to use spans and source operations without an
 allocator. Enable `alloc` for the scanner and payload interfaces.
 
 ## Matching semantics
