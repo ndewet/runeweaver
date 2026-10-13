@@ -315,14 +315,33 @@ impl LexerDefinition {
     }
 
     /// Emits this lexer as one private matcher method.
-    fn emit(&self, runtime: &TokenStream, uses_scanner: bool) -> Result<TokenStream, CompileError> {
+    fn emit(
+        &self,
+        runtime: &TokenStream,
+        extras: &TokenStream,
+        source: &SourceLifetime,
+        uses_scanner: bool,
+        uses_source: bool,
+    ) -> Result<TokenStream, CompileError> {
         let dfa = self.compile_automaton()?;
         let fused_skips = self.rules().iter().enumerate().filter_map(|(index, rule)| {
             (rule.action().is_skip() && matches!(rule.mode_action(), ResolvedModeAction::Stay))
                 .then_some(index)
         });
         let matcher = crate::ir::Matcher::new(&dfa, fused_skips);
-        Ok(emitter::emit(&dfa, &matcher, self, runtime, uses_scanner))
+        Ok(emitter::emit(
+            &dfa,
+            &matcher,
+            self,
+            emitter::EmitOptions {
+                runtime,
+                extras,
+                source_lifetime: &source.lifetime,
+                source_bounds: &source.bounds,
+                uses_scanner,
+                uses_source,
+            },
+        ))
     }
 }
 
@@ -389,24 +408,36 @@ pub fn compile_with_modes_at(
     modes: Vec<String>,
     specifications: Vec<RuleSpec>,
 ) -> Result<TokenStream, CompileError> {
-    compile_with_modes_at_inner(runtime, modes, specifications, false)
+    let source_lifetime = quote!('__runeweaver_source);
+    let extras = quote!(
+        <Self as #runtime::lexer::Automaton<#source_lifetime>>::Extras
+    );
+    let source = SourceLifetime {
+        lifetime: source_lifetime,
+        bounds: quote!(),
+    };
+    compile_with_modes_and_extras_at(runtime, extras, source, modes, specifications, true, true)
 }
 
-/// Builds a lexer whose actions can receive its scanner.
+/// Defines the input lifetime used by generated scanner methods.
 #[doc(hidden)]
-pub fn compile_with_modes_and_scanner_at(
-    runtime: TokenStream,
-    modes: Vec<String>,
-    specifications: Vec<RuleSpec>,
-) -> Result<TokenStream, CompileError> {
-    compile_with_modes_at_inner(runtime, modes, specifications, true)
+pub struct SourceLifetime {
+    /// The lifetime parameter of the input string.
+    pub lifetime: TokenStream,
+    /// The bounds between the input and token lifetimes.
+    pub bounds: TokenStream,
 }
 
-fn compile_with_modes_at_inner(
+/// Builds a lexer with a declared scanner state type.
+#[doc(hidden)]
+pub fn compile_with_modes_and_extras_at(
     runtime: TokenStream,
+    extras: TokenStream,
+    source: SourceLifetime,
     modes: Vec<String>,
     specifications: Vec<RuleSpec>,
     uses_scanner: bool,
+    uses_source: bool,
 ) -> Result<TokenStream, CompileError> {
     let mut declared_modes = vec![Mode::new("INITIAL")];
     for mode in modes {
@@ -489,7 +520,13 @@ fn compile_with_modes_at_inner(
             rule_index: None,
         });
     }
-    LexerDefinition::new(rules, declared_modes).emit(&runtime, uses_scanner)
+    LexerDefinition::new(rules, declared_modes).emit(
+        &runtime,
+        &extras,
+        &source,
+        uses_scanner,
+        uses_source,
+    )
 }
 
 #[cfg(test)]

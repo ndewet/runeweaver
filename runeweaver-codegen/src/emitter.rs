@@ -6,6 +6,15 @@ use crate::ir::Matcher;
 use proc_macro2::TokenStream;
 use quote::quote;
 
+pub(crate) struct EmitOptions<'a> {
+    pub runtime: &'a TokenStream,
+    pub extras: &'a TokenStream,
+    pub source_lifetime: &'a TokenStream,
+    pub source_bounds: &'a TokenStream,
+    pub uses_scanner: bool,
+    pub uses_source: bool,
+}
+
 fn mode_action(action: ResolvedModeAction, lexer_runtime: &TokenStream) -> TokenStream {
     match action {
         ResolvedModeAction::Stay => quote!(#lexer_runtime::ModeAction::Stay),
@@ -48,9 +57,16 @@ pub(crate) fn emit(
     dfa: &Dfa<ByteRange, RuleId>,
     matcher: &Matcher,
     lexer: &LexerDefinition,
-    runtime: &TokenStream,
-    uses_scanner: bool,
+    options: EmitOptions<'_>,
 ) -> TokenStream {
+    let EmitOptions {
+        runtime,
+        extras,
+        source_lifetime,
+        source_bounds,
+        uses_scanner,
+        uses_source,
+    } = options;
     let lexer_runtime = quote!(#runtime::lexer);
     let payload_runtime = quote!(#runtime::payload);
     let starts: Vec<_> = dfa
@@ -110,10 +126,30 @@ pub(crate) fn emit(
         let name = mode.name();
         quote!(#index => #name,)
     });
-    let scanner_extras = if uses_scanner {
-        quote!(<Self as #lexer_runtime::Automaton>::Extras)
+    let scanner_generics = if uses_source {
+        quote!(<#source_lifetime>)
     } else {
-        quote!(impl Sized)
+        quote!()
+    };
+    let source_lifetime = if uses_source {
+        quote!(#source_lifetime)
+    } else {
+        quote!('_)
+    };
+    let scanner_extras = uses_scanner
+        .then_some(extras)
+        .map_or_else(|| quote!(impl Sized), |extras| quote!(#extras));
+    let scanner_bounds = uses_source.then(|| {
+        quote! {
+            where
+                Self: #lexer_runtime::Automaton<#source_lifetime>,
+                #source_bounds
+        }
+    });
+    let action_text = if uses_source {
+        quote!(&#source_lifetime str)
+    } else {
+        quote!(&str)
     };
 
     // The UTF-8 DFA accepts complete codepoints, so selected lengths end at character boundaries.
@@ -146,10 +182,12 @@ pub(crate) fn emit(
         #selector
 
         #[inline(always)]
-        fn __runeweaver_next(
-            scanner: &mut #runtime::Scanner<'_, Self, #scanner_extras>,
+        fn __runeweaver_next #scanner_generics(
+            scanner: &mut #runtime::Scanner<#source_lifetime, Self, #scanner_extras>,
             mode: usize,
-        ) -> Option<#lexer_runtime::ScanMatch<Self>> {
+        ) -> Option<#lexer_runtime::ScanMatch<Self>>
+        #scanner_bounds
+        {
             let input = #runtime::Scanner::source(scanner);
             let mut cursor = #runtime::Scanner::position(scanner);
             loop {
@@ -199,14 +237,16 @@ pub(crate) fn emit(
         }
 
         #[cfg(test)]
-        fn __runeweaver_action(
+        fn __runeweaver_action #scanner_generics(
             rule: usize,
-            text: &str,
-            scanner: &mut #runtime::Scanner<'_, Self, #scanner_extras>,
+            text: #action_text,
+            scanner: &mut #runtime::Scanner<#source_lifetime, Self, #scanner_extras>,
         ) -> (
             Result<Option<Self>, #payload_runtime::PayloadError>,
             #lexer_runtime::ModeAction,
-        ) {
+        )
+        #scanner_bounds
+        {
             match rule {
                 #(#dispatched_actions)*
                 _ => unreachable!("generated lexer selected an unknown rule"),
@@ -236,7 +276,22 @@ mod tests {
         lexer: &LexerDefinition,
         runtime: &TokenStream,
     ) -> TokenStream {
-        super::emit(dfa, &Matcher::new(dfa, []), lexer, runtime, false)
+        let extras = quote!(());
+        let source_lifetime = quote!('__runeweaver_source);
+        let source_bounds = quote!();
+        super::emit(
+            dfa,
+            &Matcher::new(dfa, []),
+            lexer,
+            EmitOptions {
+                runtime,
+                extras: &extras,
+                source_lifetime: &source_lifetime,
+                source_bounds: &source_bounds,
+                uses_scanner: false,
+                uses_source: false,
+            },
+        )
     }
 
     fn lexer(action: TokenStream) -> LexerDefinition {

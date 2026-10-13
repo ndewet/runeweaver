@@ -8,9 +8,10 @@ use proc_macro::TokenStream;
 use proc_macro_crate::{FoundCrate, crate_name};
 use proc_macro2::{Ident, Span};
 use quote::quote;
-use runeweaver_codegen::{ModeAction, RuleSpec, compile_with_modes_and_scanner_at};
+use runeweaver_codegen::{ModeAction, RuleSpec, SourceLifetime, compile_with_modes_and_extras_at};
 use syn::{
-    Data, DeriveInput, Error, Expr, Fields, LitStr, Result, Type,
+    Data, DeriveInput, Error, Expr, Fields, GenericParam, Lifetime, LifetimeParam, LitStr, Result,
+    Type,
     parse::{Parse, ParseStream},
     parse_macro_input,
 };
@@ -18,7 +19,7 @@ use syn::{
 /// Derives the `runeweaver::Lexer` trait for an enum of token kinds.
 ///
 /// Every variant needs one `#[token("pattern")]` attribute. Unit variants
-/// emit no payload; a single-field tuple variant parses an owned payload.
+/// emit no payload; a single-field tuple variant parses or borrows a payload.
 /// Rules are considered in declaration order when equal-length matches tie.
 /// Use `with_scanner` for a converter that receives mutable scanner state.
 ///
@@ -50,9 +51,9 @@ use syn::{
 /// #     Pop,
 /// # }
 /// # pub type ScanMatch<T> = Result<(Option<T>, ModeAction), (crate::ScanError, ModeAction)>;
-/// # pub trait Automaton: Sized {
+/// # pub trait Automaton<'input>: Sized {
 /// #     type Extras;
-/// #     fn next_token(scanner: &mut crate::Scanner<'_, Self, Self::Extras>, mode: usize) -> Option<ScanMatch<Self>>;
+/// #     fn next_token(scanner: &mut crate::Scanner<'input, Self, Self::Extras>, mode: usize) -> Option<ScanMatch<Self>>;
 /// #     fn mode_name(mode: usize) -> &'static str;
 /// # }
 /// # }
@@ -64,7 +65,7 @@ use syn::{
 /// #     }
 /// # }
 /// # }
-/// # pub trait Lexer: lexer::Automaton + Sized {}
+/// # pub trait Lexer<'input>: lexer::Automaton<'input> + Sized {}
 /// # fn main() {
 /// use runeweaver_derive::Lexer;
 ///
@@ -125,35 +126,41 @@ fn derive_lexer_inner(input: DeriveInput) -> Result<proc_macro2::TokenStream> {
             },
             Fields::Unnamed(fields) if fields.unnamed.len() == 1 => {
                 let field = fields.unnamed.first().expect("one field was checked");
-                let Type::Reference(_) = field.ty else {
-                    let payload_type = &field.ty;
-                    let action = match converter {
-                        Some(Converter::Text(converter)) => quote! {
-                            #runtime::payload::PayloadResult::<#payload_type>::into_payload(
-                                (#converter)(text),
-                            )
+                let payload_type = &field.ty;
+                let action = match converter {
+                    Some(Converter::Text(converter)) => quote! {
+                        #runtime::payload::PayloadResult::<#payload_type>::into_payload(
+                            (#converter)(text),
+                        )
+                        .map(|payload| Some(Self::#variant_ident(payload)))
+                    },
+                    Some(Converter::Scanner(converter)) => quote! {
+                        #runtime::payload::PayloadResult::<#payload_type>::into_payload(
+                            (#converter)(scanner),
+                        )
+                        .map(|payload| Some(Self::#variant_ident(payload)))
+                    },
+                    None if is_str_reference(payload_type) => quote! {
+                        Ok(Some(Self::#variant_ident(scanner.slice())))
+                    },
+                    None if matches!(payload_type, Type::Reference(_)) => {
+                        return Err(Error::new_spanned(
+                            field,
+                            "a borrowed payload other than `&str` needs a converter",
+                        ));
+                    }
+                    None => quote! {
+                        #runtime::payload::parse_payload::<#payload_type>(text)
                             .map(|payload| Some(Self::#variant_ident(payload)))
-                        },
-                        Some(Converter::Scanner(converter)) => quote! {
-                            #runtime::payload::PayloadResult::<#payload_type>::into_payload(
-                                (#converter)(scanner),
-                            )
-                            .map(|payload| Some(Self::#variant_ident(payload)))
-                        },
-                        None => quote! {
-                            #runtime::payload::parse_payload::<#payload_type>(text)
-                                .map(|payload| Some(Self::#variant_ident(payload)))
-                        },
-                    };
-                    rules.push(rule_spec(
-                        RuleSpec::emit(pattern.value(), action),
-                        &attribute.modes,
-                        &attribute.mode_action,
-                    ));
-                    patterns.push(pattern);
-                    continue;
+                    },
                 };
-                return Err(Error::new_spanned(field, "token payloads must be owned"));
+                rules.push(rule_spec(
+                    RuleSpec::emit(pattern.value(), action),
+                    &attribute.modes,
+                    &attribute.mode_action,
+                ));
+                patterns.push(pattern);
+                continue;
             }
             Fields::Unnamed(_) => {
                 return Err(Error::new_spanned(
@@ -176,12 +183,41 @@ fn derive_lexer_inner(input: DeriveInput) -> Result<proc_macro2::TokenStream> {
         patterns.push(pattern);
     }
 
-    let compile = if uses_scanner {
-        compile_with_modes_and_scanner_at
-    } else {
-        runeweaver_codegen::compile_with_modes_at
-    };
-    let matcher = compile(runtime.clone(), modes, rules).map_err(|error| {
+    let declared_lifetimes: Vec<_> = input
+        .generics
+        .lifetimes()
+        .map(|parameter| parameter.lifetime.clone())
+        .collect();
+    let mut source_name = "__runeweaver_source".to_owned();
+    while declared_lifetimes
+        .iter()
+        .any(|lifetime| lifetime.ident == source_name)
+    {
+        source_name.push('_');
+    }
+    let source_lifetime = Lifetime::new(&format!("'{source_name}"), Span::call_site());
+    let token_source_lifetime = declared_lifetimes.first().cloned();
+    let uses_source = token_source_lifetime.is_some();
+    let reverse_source_bound = token_source_lifetime
+        .as_ref()
+        .map(|lifetime| quote!(#lifetime: #source_lifetime,));
+    let source_bounds = quote!(
+        #(#source_lifetime: #declared_lifetimes,)*
+        #reverse_source_bound
+    );
+    let matcher = compile_with_modes_and_extras_at(
+        runtime.clone(),
+        quote!(#extras),
+        SourceLifetime {
+            lifetime: quote!(#source_lifetime),
+            bounds: source_bounds,
+        },
+        modes,
+        rules,
+        uses_scanner,
+        uses_source,
+    )
+    .map_err(|error| {
         error.rule_index().map_or_else(
             || Error::new_spanned(input.ident.clone(), error.to_string()),
             |index| {
@@ -193,18 +229,37 @@ fn derive_lexer_inner(input: DeriveInput) -> Result<proc_macro2::TokenStream> {
         )
     })?;
     let ident = input.ident;
+    let mut automaton_generics = input.generics.clone();
+    automaton_generics.params.insert(
+        0,
+        GenericParam::Lifetime(LifetimeParam::new(source_lifetime.clone())),
+    );
+    let automaton_where = automaton_generics.make_where_clause();
+    for lifetime in declared_lifetimes {
+        automaton_where
+            .predicates
+            .push(syn::parse_quote!(#source_lifetime: #lifetime));
+    }
+    if let Some(lifetime) = token_source_lifetime {
+        automaton_where
+            .predicates
+            .push(syn::parse_quote!(#lifetime: #source_lifetime));
+    }
     let (impl_generics, type_generics, where_clause) = input.generics.split_for_impl();
+    let (automaton_impl_generics, _, automaton_where_clause) = automaton_generics.split_for_impl();
     Ok(quote! {
         impl #impl_generics #ident #type_generics #where_clause {
             #matcher
         }
 
-        impl #impl_generics #runtime::lexer::Automaton for #ident #type_generics #where_clause {
+        impl #automaton_impl_generics #runtime::lexer::Automaton<#source_lifetime>
+            for #ident #type_generics #automaton_where_clause
+        {
             type Extras = #extras;
 
             #[inline(always)]
             fn next_token(
-                scanner: &mut #runtime::Scanner<'_, Self, Self::Extras>,
+                scanner: &mut #runtime::Scanner<#source_lifetime, Self, Self::Extras>,
                 mode: usize,
             ) -> Option<#runtime::lexer::ScanMatch<Self>> {
                 Self::__runeweaver_next(scanner, mode)
@@ -215,6 +270,14 @@ fn derive_lexer_inner(input: DeriveInput) -> Result<proc_macro2::TokenStream> {
             }
         }
     })
+}
+
+fn is_str_reference(ty: &Type) -> bool {
+    let Type::Reference(reference) = ty else {
+        return false;
+    };
+    reference.mutability.is_none()
+        && matches!(reference.elem.as_ref(), Type::Path(path) if path.path.is_ident("str"))
 }
 
 struct LexerConfig {
