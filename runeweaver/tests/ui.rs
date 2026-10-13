@@ -14,6 +14,21 @@ struct Case {
 
 const CASES: &[Case] = &[
     Case {
+        name: "duplicate_source",
+        message: "error: `source` can be specified only once",
+        location: "src/bin/duplicate_source.rs:5:1",
+    },
+    Case {
+        name: "invalid_source",
+        message: "error: the source must be `str` or `[u8]`",
+        location: "src/bin/invalid_source.rs:4:18",
+    },
+    Case {
+        name: "borrowed_byte_payload_outlives_source",
+        message: "`input` does not live long enough",
+        location: "src/bin/borrowed_byte_payload_outlives_source.rs:14:",
+    },
+    Case {
         name: "borrowed_payload_outlives_source",
         message: "`input` does not live long enough",
         location: "src/bin/borrowed_payload_outlives_source.rs:13:",

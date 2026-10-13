@@ -13,6 +13,7 @@ pub(crate) struct EmitOptions<'a> {
     pub source_bounds: &'a TokenStream,
     pub uses_scanner: bool,
     pub uses_source: bool,
+    pub byte_source: bool,
 }
 
 fn mode_action(action: ResolvedModeAction, lexer_runtime: &TokenStream) -> TokenStream {
@@ -66,6 +67,7 @@ pub(crate) fn emit(
         source_bounds,
         uses_scanner,
         uses_source,
+        byte_source,
     } = options;
     let lexer_runtime = quote!(#runtime::lexer);
     let payload_runtime = quote!(#runtime::payload);
@@ -139,21 +141,44 @@ pub(crate) fn emit(
     let scanner_extras = uses_scanner
         .then_some(extras)
         .map_or_else(|| quote!(impl Sized), |extras| quote!(#extras));
+    let source_type = byte_source.then(|| quote!(, [u8]));
     let scanner_bounds = uses_source.then(|| {
         quote! {
             where
-                Self: #lexer_runtime::Automaton<#source_lifetime>,
+                Self: #lexer_runtime::Automaton<#source_lifetime #source_type>,
                 #source_bounds
         }
     });
-    let action_text = if uses_source {
+    let action_text = if byte_source {
+        if uses_source {
+            quote!(&#source_lifetime [u8])
+        } else {
+            quote!(&[u8])
+        }
+    } else if uses_source {
         quote!(&#source_lifetime str)
     } else {
         quote!(&str)
     };
+    let input_bytes = if byte_source {
+        quote!(input)
+    } else {
+        quote!(input.as_bytes())
+    };
+    let error_length = if byte_source {
+        quote!(1)
+    } else {
+        quote!(
+            input[start..]
+                .chars()
+                .next()
+                .expect("the input is not empty")
+                .len_utf8()
+        )
+    };
 
-    // The UTF-8 DFA accepts complete codepoints, so selected lengths end at character boundaries.
-    // Each skipped prefix has the same guarantee; offset + length never exceeds input.len().
+    // The DFA accepts complete source units. Selected and skipped ranges stay
+    // within the source, and UTF-8 matches end at character boundaries.
     quote! {
         #[cfg(test)]
         fn __runeweaver_start(mode: usize) -> Option<usize> {
@@ -183,7 +208,7 @@ pub(crate) fn emit(
 
         #[inline(always)]
         fn __runeweaver_next #scanner_generics(
-            scanner: &mut #runtime::Scanner<#source_lifetime, Self, #scanner_extras>,
+            scanner: &mut #runtime::Scanner<#source_lifetime, Self, #scanner_extras #source_type>,
             mode: usize,
         ) -> Option<#lexer_runtime::ScanMatch<Self>>
         #scanner_bounds
@@ -196,15 +221,11 @@ pub(crate) fn emit(
                     return None;
                 }
                 let Some((rule, length)) = Self::__runeweaver_select(
-                    &input.as_bytes()[cursor..],
+                    &#input_bytes[cursor..],
                     mode,
                 ) else {
                     let start = cursor;
-                    cursor += input[start..]
-                        .chars()
-                        .next()
-                        .expect("the input is not empty")
-                        .len_utf8();
+                    cursor += #error_length;
                     scanner.__set_match(start, cursor);
                     return Some(Err((
                         #runtime::ScanError::unrecognized(scanner.span()),
@@ -240,7 +261,7 @@ pub(crate) fn emit(
         fn __runeweaver_action #scanner_generics(
             rule: usize,
             text: #action_text,
-            scanner: &mut #runtime::Scanner<#source_lifetime, Self, #scanner_extras>,
+            scanner: &mut #runtime::Scanner<#source_lifetime, Self, #scanner_extras #source_type>,
         ) -> (
             Result<Option<Self>, #payload_runtime::PayloadError>,
             #lexer_runtime::ModeAction,
@@ -290,6 +311,7 @@ mod tests {
                 source_bounds: &source_bounds,
                 uses_scanner: false,
                 uses_source: false,
+                byte_source: false,
             },
         )
     }
