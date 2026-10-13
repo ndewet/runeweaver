@@ -94,12 +94,12 @@ impl Display for ScanError {
 
 impl std::error::Error for ScanError {}
 
-/// Iterates over tokens and scanning errors.
+/// Holds the mutable state for one scan of an input string.
 ///
 /// Invalid input and payload errors consume their byte ranges and scanning
 /// continues. A rule's mode action still takes effect when its
 /// payload conversion fails.
-pub struct Scan<'input, T> {
+pub struct Scanner<'input, T> {
     input: &'input str,
     offset: usize,
     span: Span,
@@ -109,14 +109,40 @@ pub struct Scan<'input, T> {
     marker: PhantomData<T>,
 }
 
+/// An iterator over tokens and scanning errors.
+///
+/// This alias preserves the original name for [`Scanner`]. New code can name
+/// the stateful object directly.
+pub type Scan<'input, T> = Scanner<'input, T>;
+
 #[derive(Clone, Copy)]
 struct ModeFrame {
     id: usize,
     opened_at: usize,
 }
 
-impl<'input, T> Scan<'input, T> {
-    pub(crate) fn new(input: &'input str) -> Self {
+impl<'input, T> Scanner<'input, T> {
+    /// Creates a scanner for `input`.
+    ///
+    /// [`Lexer::scan`](crate::Lexer::scan) usually provides better type
+    /// inference.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use runeweaver::{Lexer, Scanner};
+    ///
+    /// #[derive(Lexer)]
+    /// enum Token {
+    ///     #[token("[a-z]+")]
+    ///     Word,
+    /// }
+    ///
+    /// let scanner = Scanner::<Token>::new("word");
+    /// assert_eq!(scanner.position(), 0);
+    /// ```
+    #[must_use]
+    pub fn new(input: &'input str) -> Self {
         Self {
             input,
             offset: 0,
@@ -131,9 +157,89 @@ impl<'input, T> Scan<'input, T> {
         }
     }
 
+    /// Returns the complete input string.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use runeweaver::Lexer;
+    ///
+    /// #[derive(Lexer)]
+    /// enum Token {
+    ///     #[token("[a-z]+")]
+    ///     Word,
+    /// }
+    ///
+    /// assert_eq!(Token::scan("word").source(), "word");
+    /// ```
+    pub const fn source(&self) -> &'input str {
+        self.input
+    }
+
+    /// Returns the input after the current scan position.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use runeweaver::Lexer;
+    ///
+    /// #[derive(Lexer)]
+    /// enum Token {
+    ///     #[token("[a-z]+")]
+    ///     Word,
+    /// }
+    ///
+    /// let mut scanner = Token::scan("word rest");
+    /// let _ = scanner.next();
+    /// assert_eq!(scanner.remainder(), " rest");
+    /// ```
+    pub fn remainder(&self) -> &'input str {
+        &self.input[self.offset..]
+    }
+
     /// Returns the byte offset at which the next scan starts.
     pub const fn position(&self) -> usize {
         self.offset
+    }
+
+    /// Moves the current scan position forward by `bytes`.
+    ///
+    /// This operation also extends the current span. It supports callbacks
+    /// that consume input beyond the matched rule.
+    ///
+    /// # Panics
+    ///
+    /// This function panics if the new position exceeds the input or splits a
+    /// UTF-8 codepoint.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use runeweaver::{Lexer, Span};
+    ///
+    /// #[derive(Lexer)]
+    /// enum Token {
+    ///     #[token("[a-z]+")]
+    ///     Word,
+    /// }
+    ///
+    /// let mut scanner = Token::scan("word!");
+    /// let _ = scanner.next();
+    /// scanner.bump(1);
+    /// assert_eq!(scanner.span(), Span::new(0, 5));
+    /// assert_eq!(scanner.remainder(), "");
+    /// ```
+    pub fn bump(&mut self, bytes: usize) {
+        let end = self.offset.checked_add(bytes);
+        assert!(
+            end.is_some_and(|end| end <= self.input.len() && self.input.is_char_boundary(end)),
+            "invalid scanner bump"
+        );
+        let Some(end) = end else {
+            unreachable!("the scanner position was checked")
+        };
+        self.offset = end;
+        self.span.end = end;
     }
 
     /// Returns the byte range of the most recent token or error.
@@ -216,7 +322,7 @@ pub struct SpannedScan<'input, T> {
     scan: Scan<'input, T>,
 }
 
-impl<T: Lexer> Scan<'_, T> {
+impl<T: Lexer> Scanner<'_, T> {
     #[inline(always)]
     fn apply_mode_action(&mut self, action: ModeAction, start: usize) {
         match action {
@@ -278,7 +384,7 @@ impl<T: Lexer> Scan<'_, T> {
     }
 }
 
-impl<T: Lexer> Iterator for Scan<'_, T> {
+impl<T: Lexer> Iterator for Scanner<'_, T> {
     type Item = Result<T, ScanError>;
 
     #[inline(always)]

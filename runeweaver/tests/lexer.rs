@@ -15,6 +15,22 @@ fn first<T: Lexer>(input: &str) -> Option<(T, usize)> {
         .map(|spanned| (spanned.token, spanned.span.end))
 }
 
+#[test]
+fn scanner_exposes_and_updates_its_source_state() {
+    let mut scanner = Token::scan("aaa!");
+
+    assert_eq!(scanner.source(), "aaa!");
+    assert_eq!(scanner.remainder(), "aaa!");
+    assert_eq!(scanner.next(), Some(Ok(Token::As)));
+    assert_eq!(scanner.position(), 3);
+    assert_eq!(scanner.remainder(), "!");
+
+    scanner.bump(1);
+    assert_eq!(scanner.span(), Span::new(0, 4));
+    assert_eq!(scanner.remainder(), "");
+    assert_eq!(scanner.next(), None);
+}
+
 #[derive(Debug, PartialEq, Eq)]
 struct RuleOutput<T> {
     token: Option<T>,
