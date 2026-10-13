@@ -153,10 +153,10 @@ where
 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
-            .debug_struct("Lexer")
-            .field("source", &self.source)
-            .field("extras", &self.extras)
-            .finish_non_exhaustive()
+            .debug_map()
+            .entry(&"source", &self.source)
+            .entry(&"extras", &self.extras)
+            .finish()
     }
 }
 

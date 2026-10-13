@@ -11,7 +11,6 @@ const MANIFEST = resolve(ROOT, "Cargo.toml");
 const DEPENDENCY_MANIFESTS = [
   [resolve(ROOT, "runeweaver/Cargo.toml"), "runeweaver-derive"],
   [resolve(ROOT, "runeweaver-derive/Cargo.toml"), "runeweaver-codegen"],
-  [resolve(ROOT, "runeweaver-logos-shim/Cargo.toml"), "runeweaver"],
   [resolve(ROOT, "runeweaver-logos-shim/Cargo.toml"), "runeweaver-logos-shim-derive"],
   [resolve(ROOT, "runeweaver-logos-shim-derive/Cargo.toml"), "runeweaver-codegen"],
 ];
@@ -136,7 +135,7 @@ function applyVersion(version) {
   }
   for (const [manifest, packageName] of DEPENDENCY_MANIFESTS) {
     const dependencyPattern = new RegExp(
-      `^${packageName} = \\{ version = "=[^"]+", path = "([^"]+)" \\}$`,
+      `^${packageName} = \\{ version = "=[^"]+", path = "([^"]+)"(, optional = true)? \\}$`,
       "m",
     );
     const contents = readFileSync(manifest, "utf8");
@@ -145,7 +144,7 @@ function applyVersion(version) {
       replaceOnce(
         manifest,
         dependencyPattern,
-        `${packageName} = { version = "=${formatted}", path = "$1" }`,
+        `${packageName} = { version = "=${formatted}", path = "$1"$2 }`,
       );
     }
   }

@@ -278,7 +278,7 @@ cargo run -p runeweaver --example modes
 
 ## Logos compatibility
 
-The `runeweaver-logos-shim` package supplies the common Logos API with
+The `runeweaver-logos-shim` package supplies the Logos 0.16.1 API with
 Runeweaver as its lexer engine. Rename the dependency to keep existing
 `logos` imports:
 
@@ -355,4 +355,6 @@ Runeweaver's derive-based lexer declaration syntax was inspired by
 [Logos](https://github.com/maciejhirsz/logos). Runeweaver is an independent
 implementation with its own regex parser and automata pipeline, designed around
 borrowed string input, lexical modes, owned payloads, and structured error recovery.
-Runeweaver does not incorporate Logos source code.
+The Runeweaver engine does not incorporate Logos source code. The shim adapts
+the Logos source interfaces under their MIT and Apache 2.0 licenses. The
+compatibility workspace includes the upstream tests under those licenses.

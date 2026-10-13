@@ -45,6 +45,13 @@ jobs:
       - name: Test
         run: cargo test --workspace
 
+      - name: Logos compatibility
+        run: |
+          cargo test --manifest-path logos-tests/Cargo.toml --locked
+          cargo test --manifest-path logos-tests/Cargo.toml --locked --all-features
+          cargo check -p runeweaver-logos-shim --no-default-features
+          cargo check -p runeweaver-logos-shim --no-default-features --features export_derive,forbid_unsafe
+
       - name: Release test
         run: cargo test --workspace --release
 

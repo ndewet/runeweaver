@@ -1,0 +1,5 @@
+error: multiple rules match with the same priority; set an explicit priority
+ --> tests/ui/err/priority-conflict.rs:4:6
+  |
+4 | enum Tokens {
+  |      ^^^^^^

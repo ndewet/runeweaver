@@ -1,0 +1,18 @@
+[workspace]
+
+[package]
+name = "tests"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+logos = { package = "runeweaver-logos-shim", path = "../runeweaver-logos-shim" }
+
+[features]
+forbid_unsafe = ["logos/forbid_unsafe"]
+debug = ["logos/debug"]
+state_machine_codegen = ["logos/state_machine_codegen"]
+
+[dev-dependencies]
+trybuild = "1.0.114"

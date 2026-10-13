@@ -1,0 +1,11 @@
+error: a byte rule matches empty input
+ --> tests/ui/err/subpattern-match-empty.rs:5:6
+  |
+5 | enum Example1 {
+  |      ^^^^^^^^
+
+error: a byte rule matches empty input
+  --> tests/ui/err/subpattern-match-empty.rs:12:6
+   |
+12 | enum Example2 {
+   |      ^^^^^^^^

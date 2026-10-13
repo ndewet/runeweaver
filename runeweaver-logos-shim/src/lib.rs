@@ -1,7 +1,9 @@
-//! Provides the common Logos API with Runeweaver as the lexer engine.
+//! Provides the Logos 0.16.1 API with Runeweaver as the lexer engine.
 //!
-//! Use this package as `logos` in `Cargo.toml`. The shim supports UTF-8 string
-//! sources, token and regex rules, callbacks, extras, errors, and skip rules.
+//! Use this package as `logos` in `Cargo.toml`. The shim supports string and
+//! byte sources, token and regex rules, callbacks, extras, errors, and skip rules.
+
+#![no_std]
 
 mod lexer;
 pub mod source;
@@ -10,6 +12,7 @@ pub mod source;
 pub mod internal;
 
 pub use lexer::{Lexer, Span, SpannedIter};
+#[cfg(feature = "export_derive")]
 pub use runeweaver_logos_shim_derive::Logos;
 pub use source::Source;
 
@@ -70,9 +73,4 @@ pub enum FilterResult<T, E> {
 /// Tells a callback to omit its current match.
 pub fn skip<'source, Token: Logos<'source>>(_: &mut Lexer<'source, Token>) -> Skip {
     Skip
-}
-
-#[doc(hidden)]
-pub mod __private {
-    pub use runeweaver;
 }

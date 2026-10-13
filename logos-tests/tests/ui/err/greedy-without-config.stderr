@@ -1,0 +1,11 @@
+error: an unbounded greedy dot needs allow_greedy = true
+ --> tests/ui/err/greedy-without-config.rs:8:13
+  |
+8 |     #[regex("(a|b.*)")]
+  |             ^^^^^^^^^
+
+error: an unbounded greedy dot needs allow_greedy = true
+  --> tests/ui/err/greedy-without-config.rs:13:14
+   |
+13 | #[logos(skip r".+")]
+   |              ^^^^^

@@ -1,16 +1,16 @@
 //! Implements the Logos compatibility derive macro.
 
+mod config;
+mod export;
+mod pattern;
+
+use config::{Config, Definition};
 use proc_macro::TokenStream;
-use proc_macro2::{Span, TokenStream as TokenStream2};
-use quote::{format_ident, quote};
-use runeweaver_codegen::{RuleSpec, compile_with_modes_and_extras_at};
-use std::cmp::Reverse;
-use syn::parse::{Parse, ParseStream};
-use syn::punctuated::Punctuated;
-use syn::{
-    Data, DeriveInput, Error, Expr, Fields, GenericParam, Ident, Lifetime, LifetimeParam, LitInt,
-    LitStr, Result, Token, Type, parse_macro_input,
-};
+use proc_macro2::{Span, TokenStream as Tokens};
+use quote::quote;
+use runeweaver_codegen::ByteAutomaton;
+use syn::visit_mut::{self, VisitMut};
+use syn::{Data, DeriveInput, Error, Fields, Lifetime, Result, parse_macro_input};
 
 /// Derives the compatible `logos::Logos` trait.
 #[proc_macro_derive(Logos, attributes(logos, token, regex))]
@@ -20,427 +20,241 @@ pub fn derive_logos(input: TokenStream) -> TokenStream {
         .into()
 }
 
-fn derive(input: DeriveInput) -> Result<TokenStream2> {
+fn derive(input: DeriveInput) -> Result<Tokens> {
     let Data::Enum(data) = &input.data else {
         return Err(Error::new_spanned(&input.ident, "`Logos` requires an enum"));
     };
     let config = Config::parse(&input.attrs)?;
-    let token_ident = &input.ident;
-    let helper_ident = format_ident!("__RuneweaverLogos{}Rules", token_ident);
-    let mut definitions = Vec::new();
-    for (variant_index, variant) in data.variants.iter().enumerate() {
-        for attribute in &variant.attrs {
-            let kind = if attribute.path().is_ident("token") {
-                Some(RuleKind::Token)
-            } else if attribute.path().is_ident("regex") {
-                Some(RuleKind::Regex)
-            } else {
-                None
-            };
-            if let Some(kind) = kind {
-                definitions.push(Definition::parse(
-                    attribute.parse_args()?,
-                    kind,
-                    variant_index,
-                )?);
-            }
-        }
-    }
-    if definitions.is_empty() {
+    let root = &config.root;
+    let token = &input.ident;
+    let lifetime = Lifetime::new("'__logos_source", Span::call_site());
+    if input.generics.lifetimes().count() > 1 || input.generics.const_params().next().is_some() {
         return Err(Error::new_spanned(
-            token_ident,
-            "a Logos enum needs at least one token or regex rule",
+            &input.generics,
+            "Logos supports one lifetime and concrete type substitutions",
         ));
     }
-
-    definitions.sort_by_key(|definition| Reverse(definition.priority));
-    let mut helper_variants = Vec::new();
-    let mut rules = Vec::new();
-    let mut action_arms = Vec::new();
-    for (rule_index, definition) in definitions.iter().enumerate() {
-        let helper_variant = format_ident!("Rule{rule_index}");
-        helper_variants.push(helper_variant.clone());
-        let pattern = match definition.kind {
-            RuleKind::Token => escape_literal(&definition.pattern.value()),
-            RuleKind::Regex => definition.pattern.value(),
-        };
-        rules.push(RuleSpec::emit(
-            pattern,
-            quote!(Ok(Some(Self::#helper_variant))),
-        ));
-        let variant = &data.variants[definition.variant_index];
-        action_arms.push(action_arm(
-            &helper_ident,
-            &helper_variant,
-            variant,
-            definition.callback.as_ref(),
-        )?);
+    let mut generics = Vec::new();
+    for parameter in &input.generics.params {
+        match parameter {
+            syn::GenericParam::Lifetime(_) => generics.push(quote!(#lifetime)),
+            syn::GenericParam::Type(parameter) => {
+                let Some(ty) = config.types.get(&parameter.ident.to_string()) else {
+                    return Err(Error::new_spanned(
+                        parameter,
+                        "a generic type needs #[logos(type T = Type)]",
+                    ));
+                };
+                let mut ty = ty.clone();
+                Substitutions {
+                    config: &config,
+                    lifetime: &lifetime,
+                }
+                .visit_type_mut(&mut ty);
+                generics.push(quote!(#ty));
+            }
+            _ => unreachable!(),
+        }
     }
-    for (skip_index, skip) in config.skips.iter().enumerate() {
-        if let Some(callback) = &skip.callback {
-            let helper_variant = format_ident!("Skip{skip_index}");
-            helper_variants.push(helper_variant.clone());
-            rules.push(RuleSpec::emit(
-                skip.pattern.value(),
-                quote!(Ok(Some(Self::#helper_variant))),
+    let token_type = if generics.is_empty() {
+        quote!(#token)
+    } else {
+        quote!(#token<#(#generics),*>)
+    };
+    let mut definitions = Vec::new();
+    for (index, variant) in data.variants.iter().enumerate() {
+        for attribute in &variant.attrs {
+            if attribute.path().is_ident("token") || attribute.path().is_ident("regex") {
+                let args = attribute.parse_args()?;
+                definitions.push(Definition {
+                    args,
+                    variant: Some(index),
+                    literal: attribute.path().is_ident("token"),
+                });
+            }
+        }
+    }
+    definitions.extend(config.skips.iter().cloned().map(|args| Definition {
+        args,
+        variant: None,
+        literal: false,
+    }));
+    let mut patterns = Vec::new();
+    let mut priorities = Vec::new();
+    let mut actions = Vec::new();
+    for (index, definition) in definitions.iter().enumerate() {
+        let (hir, priority) = pattern::parse(definition, &config)?;
+        if config.utf8 && !hir.properties().is_utf8() {
+            return Err(Error::new_spanned(
+                &definition.args.pattern,
+                "a string source cannot match invalid UTF-8",
             ));
-            action_arms.push(quote! {
-                #helper_ident::#helper_variant => {
-                    match ::logos::internal::construct_skip(
-                        ::logos::internal::call_callback(#callback, lexer),
-                        lexer,
-                    ) {
-                        ::logos::internal::SkipResult::Skip => {
-                            ::logos::internal::CallbackResult::Skip
-                        }
-                        ::logos::internal::SkipResult::Error(error) => {
-                            ::logos::internal::CallbackResult::Error(error)
-                        }
-                    }
-                },
-            });
+        }
+        priorities.push(priority);
+        patterns.push(
+            pattern::lower(&hir)
+                .map_err(|message| Error::new_spanned(&definition.args.pattern, message))?,
+        );
+        let callback = &definition.args.callback;
+        let action = if let Some(variant_index) = definition.variant {
+            let variant = &data.variants[variant_index];
+            let name = &variant.ident;
+            let constructor = match &variant.fields {
+                Fields::Unit => quote!(|()| Self::#name),
+                Fields::Unnamed(fields) if fields.unnamed.len() == 1 => quote!(Self::#name),
+                _ => {
+                    return Err(Error::new_spanned(
+                        variant,
+                        "a Logos token has zero fields or one unnamed field",
+                    ));
+                }
+            };
+            if let Some(callback) = callback {
+                quote!(#root::internal::CallbackRetVal::construct(#root::internal::call_callback(#callback, lexer), #constructor))
+            } else {
+                match &variant.fields {
+                    Fields::Unit => quote!(#root::internal::CallbackResult::Emit(Self::#name)),
+                    _ => quote!(#root::internal::CallbackResult::Emit(Self::#name(lexer.slice()))),
+                }
+            }
+        } else if let Some(callback) = callback {
+            quote!(#root::internal::construct_skip(#root::internal::call_callback(#callback, lexer), lexer).into())
         } else {
-            rules.push(RuleSpec::skip(skip.pattern.value()));
+            quote!(#root::internal::CallbackResult::Skip)
+        };
+        actions.push(quote!(#index => #action,));
+    }
+    let automaton = ByteAutomaton::compile(&patterns)
+        .map_err(|error| Error::new_spanned(token, error.to_string()))?;
+    if let Some(destination) = &config.export {
+        export::graphs(destination, &token.to_string(), &automaton)?;
+    }
+    let mut accepts = Vec::new();
+    for (state, rules) in automaton.accepts.iter().enumerate() {
+        if let Some(priority) = rules.iter().map(|rule| priorities[*rule]).max() {
+            let winners: Vec<_> = rules
+                .iter()
+                .copied()
+                .filter(|rule| priorities[*rule] == priority)
+                .collect();
+            if winners.len() != 1 {
+                return Err(Error::new_spanned(
+                    token,
+                    "multiple rules match with the same priority; set an explicit priority",
+                ));
+            }
+            let rule = winners[0];
+            accepts.push(quote!(#state => ::core::option::Option::Some(#rule),));
         }
     }
-
-    let runtime = quote!(::logos::__private::runeweaver);
-    let matcher = compile_with_modes_and_extras_at(
-        runtime.clone(),
-        quote!(()),
-        quote!(),
-        Vec::new(),
-        rules,
-        false,
-        false,
-    )
-    .map_err(|error| Error::new_spanned(token_ident, error.to_string()))?;
-
-    let source_lifetime = Lifetime::new("'__logos_source", Span::call_site());
-    let declared_lifetimes: Vec<_> = input
-        .generics
-        .lifetimes()
-        .map(|parameter| parameter.lifetime.clone())
-        .collect();
-    let token_source = declared_lifetimes.first().cloned();
-    let mut impl_generics = input.generics.clone();
-    impl_generics.params.insert(
-        0,
-        GenericParam::Lifetime(LifetimeParam::new(source_lifetime.clone())),
+    let transitions: Vec<_> = automaton.transitions.iter().enumerate().filter(|(_, edges)| !edges.is_empty()).map(|(state, edges)| {
+        let edges = edges.iter().map(|(low, high, target)| quote!(#low..=#high => ::core::option::Option::Some(#target),));
+        quote!(#state => match byte { #(#edges)* _ => ::core::option::Option::None },)
+    }).collect();
+    let start = automaton.start;
+    let mut extras = config.extras.clone();
+    let mut error = config.error.clone();
+    let mut source = config.source.clone().unwrap_or_else(|| {
+        if config.utf8 {
+            syn::parse_quote!(str)
+        } else {
+            syn::parse_quote!([u8])
+        }
+    });
+    let mut substitutions = Substitutions {
+        config: &config,
+        lifetime: &lifetime,
+    };
+    substitutions.visit_type_mut(&mut extras);
+    substitutions.visit_type_mut(&mut error);
+    substitutions.visit_type_mut(&mut source);
+    let default_error = config.error_callback.as_ref().map_or_else(
+        || quote!(<#error as ::core::default::Default>::default()),
+        |callback| quote!(#root::internal::call_callback(#callback, lexer)),
     );
-    let where_clause = impl_generics.make_where_clause();
-    for lifetime in &declared_lifetimes {
-        where_clause
-            .predicates
-            .push(syn::parse_quote!(#source_lifetime: #lifetime));
-    }
-    if let Some(lifetime) = token_source {
-        where_clause
-            .predicates
-            .push(syn::parse_quote!(#lifetime: #source_lifetime));
-    }
-    let (logos_impl_generics, _, logos_where_clause) = impl_generics.split_for_impl();
-    let (_, type_generics, _) = input.generics.split_for_impl();
-    let extras = config.extras;
-    let error = config.error;
-
-    Ok(quote! {
-        #[doc(hidden)]
-        enum #helper_ident {
-            #(#helper_variants),*
+    let scanner = if definitions.is_empty() {
+        quote! {
+            let base = lexer.__position();
+            if base == #root::Source::len(lexer.source()) { return ::core::option::Option::None; }
+            let end = #root::Source::find_boundary(lexer.source(), base + 1);
+            lexer.__set_span(base, end);
+            ::core::option::Option::Some(::core::result::Result::Err(#default_error))
         }
-
-        impl #helper_ident {
-            #matcher
-        }
-
-        impl<'__runeweaver_source> #runtime::lexer::Automaton<'__runeweaver_source>
-            for #helper_ident
-        {
-            type Extras = ();
-
-            fn next_token(
-                scanner: &mut #runtime::Scanner<'__runeweaver_source, Self, ()>,
-                mode: usize,
-            ) -> Option<#runtime::lexer::ScanMatch<Self>> {
-                Self::__runeweaver_next(scanner, mode)
-            }
-
-            fn mode_name(mode: usize) -> &'static str {
-                Self::__runeweaver_mode_name(mode)
-            }
-        }
-
-        impl #logos_impl_generics ::logos::Logos<#source_lifetime>
-            for #token_ident #type_generics #logos_where_clause
-        {
-            type Extras = #extras;
-            type Source = str;
-            type Error = #error;
-
-            fn lex(
-                lexer: &mut ::logos::Lexer<#source_lifetime, Self>,
-            ) -> Option<Result<Self, Self::Error>> {
-                loop {
-                    let base = lexer.__position();
-                    let remaining = lexer.remainder();
-                    let mut scanner = #runtime::Scanner::<#helper_ident>::new(remaining);
-                    let result = scanner.next();
-                    let position = scanner.position();
-                    let span = scanner.span();
-                    drop(scanner);
-                    match result {
-                        None => {
-                            lexer.__set_span(base + position, base + position);
-                            return None;
-                        }
-                        Some(Err(_)) => {
-                            lexer.__set_span(base + span.start, base + span.end);
-                            return Some(Err(Self::Error::default()));
-                        }
-                        Some(Ok(rule)) => {
-                            lexer.__set_span(base + span.start, base + span.end);
-                            let action = match rule {
-                                #(#action_arms)*
-                            };
-                            match action {
-                                ::logos::internal::CallbackResult::Emit(token) => {
-                                    return Some(Ok(token));
-                                }
-                                ::logos::internal::CallbackResult::Error(error) => {
-                                    return Some(Err(error));
-                                }
-                                ::logos::internal::CallbackResult::DefaultError => {
-                                    return Some(Err(Self::Error::default()));
-                                }
-                                ::logos::internal::CallbackResult::Skip => continue,
-                            }
-                        }
+    } else {
+        quote! {
+            loop {
+                let base = lexer.__position();
+                if base == #root::Source::len(lexer.source()) { return ::core::option::Option::None; }
+                let mut state = #start;
+                let mut cursor = base;
+                let mut best: ::core::option::Option<(usize, usize)> = ::core::option::Option::None;
+                while let ::core::option::Option::Some(byte) = #root::Source::read::<u8>(lexer.source(), cursor) {
+                    let next = match state { #(#transitions)* _ => ::core::option::Option::None };
+                    let ::core::option::Option::Some(next) = next else { break; };
+                    state = next;
+                    cursor += 1;
+                    if let ::core::option::Option::Some(rule) = match state { #(#accepts)* _ => ::core::option::Option::None } {
+                        best = ::core::option::Option::Some((rule, cursor));
                     }
                 }
+                let ::core::option::Option::Some((rule, end)) = best else {
+                    let end = #root::Source::find_boundary(lexer.source(), cursor.max(base + 1));
+                    lexer.__set_span(base, end);
+                    return ::core::option::Option::Some(::core::result::Result::Err(#default_error));
+                };
+                lexer.__set_span(base, end);
+                let action = match rule { #(#actions)* _ => unreachable!("invalid Runeweaver rule") };
+                match action {
+                    #root::internal::CallbackResult::Emit(token) => return ::core::option::Option::Some(::core::result::Result::Ok(token)),
+                    #root::internal::CallbackResult::Error(error) => return ::core::option::Option::Some(::core::result::Result::Err(error)),
+                    #root::internal::CallbackResult::DefaultError => return ::core::option::Option::Some(::core::result::Result::Err(#default_error)),
+                    #root::internal::CallbackResult::Skip => {
+                        let position = lexer.__position();
+                        lexer.__set_span(position, position);
+                        continue;
+                    },
+                }
+            }
+        }
+    };
+    Ok(quote! {
+        impl<#lifetime> #root::Logos<#lifetime> for #token_type {
+            type Extras = #extras;
+            type Source = #source;
+            type Error = #error;
+
+            fn lex(lexer: &mut #root::Lexer<#lifetime, Self>) -> ::core::option::Option<::core::result::Result<Self, #error>> {
+                #scanner
             }
         }
     })
 }
 
-fn action_arm(
-    helper: &Ident,
-    helper_variant: &Ident,
-    variant: &syn::Variant,
-    callback: Option<&Expr>,
-) -> Result<TokenStream2> {
-    let variant_ident = &variant.ident;
-    let action = match &variant.fields {
-        Fields::Unit => callback.map_or_else(
-            || quote!(::logos::internal::CallbackResult::Emit(Self::#variant_ident)),
-            |callback| {
-                quote! {
-                    ::logos::internal::CallbackRetVal::construct(
-                        ::logos::internal::call_callback(#callback, lexer),
-                        |()| Self::#variant_ident,
-                    )
+struct Substitutions<'a> {
+    config: &'a Config,
+    lifetime: &'a Lifetime,
+}
+
+impl VisitMut for Substitutions<'_> {
+    fn visit_type_mut(&mut self, ty: &mut syn::Type) {
+        if let syn::Type::Path(path) = ty {
+            if let Some(ident) = path.path.get_ident() {
+                if let Some(replacement) = self.config.types.get(&ident.to_string()) {
+                    *ty = replacement.clone();
                 }
-            },
-        ),
-        Fields::Unnamed(fields) if fields.unnamed.len() == 1 => {
-            let field = fields.unnamed.first().expect("one field was checked");
-            if let Some(callback) = callback {
-                quote! {
-                    ::logos::internal::CallbackRetVal::construct(
-                        ::logos::internal::call_callback(#callback, lexer),
-                        Self::#variant_ident,
-                    )
-                }
-            } else if is_str_reference(&field.ty) {
-                quote! {
-                    ::logos::internal::CallbackResult::Emit(
-                        Self::#variant_ident(lexer.slice()),
-                    )
-                }
-            } else {
-                return Err(Error::new_spanned(
-                    field,
-                    "a payload rule needs a callback unless its payload is `&str`",
-                ));
             }
         }
-        _ => {
-            return Err(Error::new_spanned(
-                variant,
-                "a Logos token must be a unit variant or have one tuple payload",
-            ));
+        visit_mut::visit_type_mut(self, ty);
+        if let syn::Type::Reference(reference) = ty {
+            if reference.lifetime.is_none() {
+                reference.lifetime = Some(self.lifetime.clone());
+            }
         }
-    };
-    Ok(quote!(#helper::#helper_variant => { #action },))
-}
-
-fn is_str_reference(ty: &Type) -> bool {
-    matches!(
-        ty,
-        Type::Reference(reference)
-            if reference.mutability.is_none()
-                && matches!(reference.elem.as_ref(), Type::Path(path) if path.path.is_ident("str"))
-    )
-}
-
-fn escape_literal(literal: &str) -> String {
-    let mut escaped = String::with_capacity(literal.len());
-    for character in literal.chars() {
-        if matches!(
-            character,
-            '.' | '+' | '*' | '?' | '(' | ')' | '|' | '[' | ']' | '{' | '}' | '^' | '$' | '\\'
-        ) {
-            escaped.push('\\');
-        }
-        escaped.push(character);
     }
-    escaped
-}
 
-#[derive(Clone, Copy)]
-enum RuleKind {
-    Token,
-    Regex,
-}
-
-struct Definition {
-    pattern: LitStr,
-    callback: Option<Expr>,
-    priority: usize,
-    kind: RuleKind,
-    variant_index: usize,
-}
-
-impl Definition {
-    fn parse(arguments: DefinitionArgs, kind: RuleKind, variant_index: usize) -> Result<Self> {
-        let priority = arguments.priority.unwrap_or_else(|| match kind {
-            RuleKind::Token => arguments.pattern.value().chars().count() * 2,
-            RuleKind::Regex => 0,
-        });
-        Ok(Self {
-            pattern: arguments.pattern,
-            callback: arguments.callback,
-            priority,
-            kind,
-            variant_index,
-        })
-    }
-}
-
-struct DefinitionArgs {
-    pattern: LitStr,
-    callback: Option<Expr>,
-    priority: Option<usize>,
-}
-
-impl Parse for DefinitionArgs {
-    fn parse(input: ParseStream<'_>) -> Result<Self> {
-        let pattern = input.parse()?;
-        let mut callback = None;
-        let mut priority = None;
-        while !input.is_empty() {
-            input.parse::<Token![,]>()?;
-            if input.is_empty() {
-                break;
-            }
-            let fork = input.fork();
-            if fork.peek(Ident) && fork.peek2(Token![=]) {
-                let name: Ident = input.parse()?;
-                input.parse::<Token![=]>()?;
-                if name == "priority" {
-                    let value: LitInt = input.parse()?;
-                    priority = Some(value.base10_parse()?);
-                } else if name == "callback" {
-                    callback = Some(input.parse()?);
-                } else {
-                    return Err(Error::new_spanned(name, "unsupported Logos rule option"));
-                }
-            } else {
-                if callback.is_some() {
-                    return Err(input.error("a rule can have only one callback"));
-                }
-                callback = Some(input.parse()?);
-            }
+    fn visit_lifetime_mut(&mut self, lifetime: &mut Lifetime) {
+        if lifetime.ident != "static" {
+            *lifetime = self.lifetime.clone();
         }
-        Ok(Self {
-            pattern,
-            callback,
-            priority,
-        })
-    }
-}
-
-struct Config {
-    extras: Type,
-    error: Type,
-    skips: Vec<DefinitionArgs>,
-}
-
-impl Config {
-    fn parse(attributes: &[syn::Attribute]) -> Result<Self> {
-        let mut extras = None;
-        let mut error = None;
-        let mut skips = Vec::new();
-        for attribute in attributes
-            .iter()
-            .filter(|attribute| attribute.path().is_ident("logos"))
-        {
-            let arguments =
-                attribute.parse_args_with(Punctuated::<ConfigItem, Token![,]>::parse_terminated)?;
-            for item in arguments {
-                match item {
-                    ConfigItem::Extras(ty) => extras = Some(ty),
-                    ConfigItem::Error(ty) => error = Some(ty),
-                    ConfigItem::Skip(pattern) => skips.push(pattern),
-                }
-            }
-        }
-        Ok(Self {
-            extras: extras.unwrap_or_else(|| syn::parse_quote!(())),
-            error: error.unwrap_or_else(|| syn::parse_quote!(())),
-            skips,
-        })
-    }
-}
-
-enum ConfigItem {
-    Extras(Type),
-    Error(Type),
-    Skip(DefinitionArgs),
-}
-
-impl Parse for ConfigItem {
-    fn parse(input: ParseStream<'_>) -> Result<Self> {
-        let name: Ident = input.parse()?;
-        if name == "extras" || name == "error" {
-            input.parse::<Token![=]>()?;
-            let ty = input.parse()?;
-            return Ok(if name == "extras" {
-                Self::Extras(ty)
-            } else {
-                Self::Error(ty)
-            });
-        }
-        if name == "skip" {
-            let definition = if input.peek(syn::token::Paren) {
-                let content;
-                syn::parenthesized!(content in input);
-                content.parse()?
-            } else {
-                DefinitionArgs {
-                    pattern: input.parse()?,
-                    callback: None,
-                    priority: None,
-                }
-            };
-            if definition.priority.is_some() {
-                return Err(Error::new_spanned(
-                    &definition.pattern,
-                    "skip priorities are not supported yet",
-                ));
-            }
-            return Ok(Self::Skip(definition));
-        }
-        Err(Error::new_spanned(name, "unsupported Logos option"))
     }
 }

@@ -1,0 +1,17 @@
+error: a string source cannot match invalid UTF-8
+ --> tests/ui/err/regex-non-utf8.rs:5:13
+  |
+5 |     #[regex(b"\xFF")]
+  |             ^^^^^^^
+
+error: an unbounded greedy dot needs allow_greedy = true
+  --> tests/ui/err/regex-non-utf8.rs:11:13
+   |
+11 |     #[regex(b"\x00.*")]
+   |             ^^^^^^^^^
+
+error: an unbounded greedy dot needs allow_greedy = true
+  --> tests/ui/err/regex-non-utf8.rs:17:13
+   |
+17 |     #[regex(b"\x00.+")]
+   |             ^^^^^^^^^

@@ -33,7 +33,7 @@ enum Token<'source> {
         lexer.bump(1);
     })]
     Marker,
-    #[token("omit", |_| Filter::Skip, priority = 20)]
+    #[token("omit", |_| Filter::<()>::Skip, priority = 20)]
     Omitted,
 }
 

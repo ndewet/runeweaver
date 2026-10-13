@@ -16,8 +16,24 @@ publish = ["crates-io"]
 name = "logos"
 
 [dependencies]
-runeweaver = { version = "=0.2.0", path = "../runeweaver" }
-runeweaver-logos-shim-derive = { version = "=0.2.0", path = "../runeweaver-logos-shim-derive" }
+runeweaver-logos-shim-derive = { version = "=0.2.0", path = "../runeweaver-logos-shim-derive", optional = true }
 
-[lints]
-workspace = true
+[features]
+default = ["export_derive", "std"]
+export_derive = ["dep:runeweaver-logos-shim-derive"]
+std = []
+forbid_unsafe = []
+debug = []
+state_machine_codegen = []
+
+[lints.rust]
+missing_docs = "warn"
+unreachable_pub = "warn"
+unsafe_code = "deny"
+
+[lints.clippy]
+missing_errors_doc = "warn"
+missing_panics_doc = "warn"
+todo = "warn"
+unimplemented = "warn"
+unwrap_used = "warn"

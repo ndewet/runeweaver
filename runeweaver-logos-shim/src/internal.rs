@@ -179,6 +179,46 @@ pub enum SkipResult<'source, Token: Logos<'source>> {
     Error(Token::Error),
 }
 
+impl<'source, Token: Logos<'source>> From<SkipResult<'source, Token>>
+    for CallbackResult<'source, Token>
+{
+    fn from(value: SkipResult<'source, Token>) -> Self {
+        match value {
+            SkipResult::Skip => Self::Skip,
+            SkipResult::Error(error) => Self::Error(error),
+        }
+    }
+}
+
+impl<'source, Token: Logos<'source>> CallbackRetVal<'source, (), Token> for Filter<Token> {
+    fn construct<C>(self, _: C) -> CallbackResult<'source, Token>
+    where
+        C: Fn(()) -> Token,
+    {
+        match self {
+            Filter::Emit(token) => CallbackResult::Emit(token),
+            Filter::Skip => CallbackResult::Skip,
+        }
+    }
+}
+
+impl<'source, Token, Error> CallbackRetVal<'source, (), Token> for FilterResult<Token, Error>
+where
+    Token: Logos<'source>,
+    Error: Into<Token::Error>,
+{
+    fn construct<C>(self, _: C) -> CallbackResult<'source, Token>
+    where
+        C: Fn(()) -> Token,
+    {
+        match self {
+            FilterResult::Emit(token) => CallbackResult::Emit(token),
+            FilterResult::Skip => CallbackResult::Skip,
+            FilterResult::Error(error) => CallbackResult::Error(error.into()),
+        }
+    }
+}
+
 /// Converts a skip callback value into one lexer action.
 #[doc(hidden)]
 pub trait SkipRetVal<'source, Token: Logos<'source>> {

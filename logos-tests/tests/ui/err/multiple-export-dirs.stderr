@@ -1,0 +1,5 @@
+error: duplicate Logos option
+ --> tests/ui/err/multiple-export-dirs.rs:5:9
+  |
+5 | #[logos(export_dir = "target/tmp")]
+  |         ^^^^^^^^^^
