@@ -8,7 +8,10 @@ use proc_macro::TokenStream;
 use proc_macro_crate::{FoundCrate, crate_name};
 use proc_macro2::{Ident, Span};
 use quote::quote;
-use runeweaver_codegen::{ModeAction, RuleSpec, SourceLifetime, compile_with_modes_and_extras_at};
+use runeweaver_codegen::{
+    ModeAction, RuleSpec, SourceLifetime, compile_bytes_with_modes_and_extras_at,
+    compile_with_modes_and_extras_at,
+};
 use syn::{
     Data, DeriveInput, Error, Expr, Fields, GenericParam, Lifetime, LifetimeParam, LitStr, Result,
     Type,
@@ -101,6 +104,7 @@ fn derive_lexer_inner(input: DeriveInput) -> Result<proc_macro2::TokenStream> {
         mut rules,
         mut patterns,
         mut uses_scanner,
+        byte_source,
     } = lexer_attributes(&input.attrs, &runtime)?;
     for variant in data.variants {
         let attribute = rule_attribute(&variant.attrs, &variant.ident)?;
@@ -140,13 +144,23 @@ fn derive_lexer_inner(input: DeriveInput) -> Result<proc_macro2::TokenStream> {
                         )
                         .map(|payload| Some(Self::#variant_ident(payload)))
                     },
-                    None if is_str_reference(payload_type) => quote! {
-                        Ok(Some(Self::#variant_ident(scanner.slice())))
-                    },
+                    None if (!byte_source && is_str_reference(payload_type))
+                        || (byte_source && is_byte_reference(payload_type)) =>
+                    {
+                        quote! {
+                            Ok(Some(Self::#variant_ident(scanner.slice())))
+                        }
+                    }
                     None if matches!(payload_type, Type::Reference(_)) => {
                         return Err(Error::new_spanned(
                             field,
                             "a borrowed payload other than `&str` needs a converter",
+                        ));
+                    }
+                    None if byte_source => {
+                        return Err(Error::new_spanned(
+                            field,
+                            "a byte payload needs a converter unless it is `&[u8]`",
                         ));
                     }
                     None => quote! {
@@ -205,7 +219,12 @@ fn derive_lexer_inner(input: DeriveInput) -> Result<proc_macro2::TokenStream> {
         #(#source_lifetime: #declared_lifetimes,)*
         #reverse_source_bound
     );
-    let matcher = compile_with_modes_and_extras_at(
+    let compile = if byte_source {
+        compile_bytes_with_modes_and_extras_at
+    } else {
+        compile_with_modes_and_extras_at
+    };
+    let matcher = compile(
         runtime.clone(),
         quote!(#extras),
         SourceLifetime {
@@ -247,19 +266,20 @@ fn derive_lexer_inner(input: DeriveInput) -> Result<proc_macro2::TokenStream> {
     }
     let (impl_generics, type_generics, where_clause) = input.generics.split_for_impl();
     let (automaton_impl_generics, _, automaton_where_clause) = automaton_generics.split_for_impl();
+    let source_type = byte_source.then(|| quote!(, [u8]));
     Ok(quote! {
         impl #impl_generics #ident #type_generics #where_clause {
             #matcher
         }
 
-        impl #automaton_impl_generics #runtime::lexer::Automaton<#source_lifetime>
+        impl #automaton_impl_generics #runtime::lexer::Automaton<#source_lifetime #source_type>
             for #ident #type_generics #automaton_where_clause
         {
             type Extras = #extras;
 
             #[inline(always)]
             fn next_token(
-                scanner: &mut #runtime::Scanner<#source_lifetime, Self, Self::Extras>,
+                scanner: &mut #runtime::Scanner<#source_lifetime, Self, Self::Extras #source_type>,
                 mode: usize,
             ) -> Option<#runtime::lexer::ScanMatch<Self>> {
                 Self::__runeweaver_next(scanner, mode)
@@ -280,12 +300,21 @@ fn is_str_reference(ty: &Type) -> bool {
         && matches!(reference.elem.as_ref(), Type::Path(path) if path.path.is_ident("str"))
 }
 
+fn is_byte_reference(ty: &Type) -> bool {
+    let Type::Reference(reference) = ty else {
+        return false;
+    };
+    reference.mutability.is_none()
+        && matches!(reference.elem.as_ref(), Type::Slice(slice) if matches!(slice.elem.as_ref(), Type::Path(path) if path.path.is_ident("u8")))
+}
+
 struct LexerConfig {
     extras: Type,
     modes: Vec<String>,
     rules: Vec<RuleSpec>,
     patterns: Vec<LitStr>,
     uses_scanner: bool,
+    byte_source: bool,
 }
 
 fn lexer_attributes(
@@ -297,11 +326,22 @@ fn lexer_attributes(
     let mut rules = Vec::new();
     let mut patterns = Vec::new();
     let mut uses_scanner = false;
+    let mut source = None;
     attributes
         .iter()
         .filter(|attribute| attribute.path().is_ident("lexer"))
         .try_for_each(|attribute| {
             let config: LexerAttribute = attribute.parse_args()?;
+            if config.name == "source" {
+                if source.is_some() { return Err(Error::new_spanned(attribute, "`source` can be specified only once")); }
+                let ty = config.extras.expect("the source option has a type");
+                source = Some(match &ty {
+                    Type::Path(path) if path.path.is_ident("str") => false,
+                    Type::Slice(slice) if matches!(slice.elem.as_ref(), Type::Path(path) if path.path.is_ident("u8")) => true,
+                    _ => return Err(Error::new_spanned(ty, "the source must be `str` or `[u8]`")),
+                });
+                return Ok(());
+            }
             if config.name == "mode" {
                 let Some(mode) = config.mode else {
                     unreachable!()
@@ -322,7 +362,7 @@ fn lexer_attributes(
             if config.name != "skip" {
                 return Err(Error::new_spanned(
                     attribute,
-                    "expected `extras`, `mode`, or `skip`",
+                    "expected `extras`, `mode`, `source`, or `skip`",
                 ));
             }
             let pattern = config.pattern.expect("skip attribute has a pattern");
@@ -361,6 +401,7 @@ fn lexer_attributes(
         rules,
         patterns,
         uses_scanner,
+        byte_source: source.unwrap_or(false),
     })
 }
 
@@ -411,7 +452,7 @@ impl Parse for LexerAttribute {
                 rule: RuleConfig::stay(),
             });
         }
-        if name == "extras" {
+        if name == "extras" || name == "source" {
             let extras = input.parse()?;
             if !input.is_empty() {
                 return Err(input.error("unexpected lexer extras attribute content"));

@@ -2,21 +2,22 @@
 
 use crate::lexer::ModeAction;
 use crate::payload::PayloadError;
-use crate::{Lexer, Span, Spanned};
-use std::fmt::{Display, Formatter};
-use std::marker::PhantomData;
+use crate::{Source, Span, Spanned};
+use alloc::{string::String, vec::Vec};
+use core::fmt::{Display, Formatter};
+use core::marker::PhantomData;
 
 /// An error encountered while scanning input.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ScanError {
-    /// No rule accepted the character at this UTF-8 byte range.
+    /// No rule accepted the source unit at this byte range.
     Unrecognized {
-        /// The UTF-8 byte range of the unrecognized character.
+        /// The byte range of the unrecognized character or byte.
         span: Span,
     },
     /// A winning rule's payload conversion failed.
     InvalidPayload {
-        /// The UTF-8 byte range matched by the rule with the invalid payload.
+        /// The byte range matched by the rule with the invalid payload.
         span: Span,
         /// The payload conversion error's message.
         message: String,
@@ -79,7 +80,7 @@ impl ScanError {
 }
 
 impl Display for ScanError {
-    fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> core::fmt::Result {
         match self {
             Self::Unrecognized { span } => write!(formatter, "unrecognized input at {span}"),
             Self::InvalidPayload { span, message } => {
@@ -92,15 +93,15 @@ impl Display for ScanError {
     }
 }
 
-impl std::error::Error for ScanError {}
+impl core::error::Error for ScanError {}
 
-/// Holds the mutable state for one scan of an input string.
+/// Holds the mutable state for one scan of a string or byte source.
 ///
 /// Invalid input and payload errors consume their byte ranges and scanning
 /// continues. A rule's mode action still takes effect when its
 /// payload conversion fails.
-pub struct Scanner<'input, T, Extras = ()> {
-    input: &'input str,
+pub struct Scanner<'input, T, Extras = (), Input: Source + ?Sized = str> {
+    input: &'input Input,
     offset: usize,
     span: Span,
     mode: ModeFrame,
@@ -117,13 +118,18 @@ pub struct Scanner<'input, T, Extras = ()> {
 /// the stateful object directly.
 pub type Scan<'input, T> = Scanner<'input, T, <T as crate::lexer::Automaton<'input>>::Extras>;
 
+/// Holds the state for a scanner over raw bytes.
+pub type ByteScanner<'input, T, Extras = <T as crate::lexer::Automaton<'input, [u8]>>::Extras> =
+    Scanner<'input, T, Extras, [u8]>;
+
 #[derive(Clone, Copy)]
 struct ModeFrame {
     id: usize,
     opened_at: usize,
 }
 
-impl<'input, T: crate::lexer::Automaton<'input>> Scanner<'input, T, T::Extras>
+impl<'input, T: crate::lexer::Automaton<'input, Input>, Input: Source + ?Sized>
+    Scanner<'input, T, T::Extras, Input>
 where
     T::Extras: Default,
 {
@@ -147,12 +153,12 @@ where
     /// assert_eq!(scanner.position(), 0);
     /// ```
     #[must_use]
-    pub fn new(input: &'input str) -> Self {
+    pub fn new(input: &'input Input) -> Self {
         Self::with_extras(input, T::Extras::default())
     }
 }
 
-impl<'input, T, Extras> Scanner<'input, T, Extras> {
+impl<'input, T, Extras, Input: Source + ?Sized> Scanner<'input, T, Extras, Input> {
     /// Creates a scanner for `input` with user state.
     ///
     /// # Examples
@@ -169,7 +175,7 @@ impl<'input, T, Extras> Scanner<'input, T, Extras> {
     /// let scanner = Scanner::<Token, _>::with_extras("word", 7_u32);
     /// assert_eq!(scanner.extras, 7);
     /// ```
-    pub fn with_extras(input: &'input str, extras: Extras) -> Self {
+    pub fn with_extras(input: &'input Input, extras: Extras) -> Self {
         Self {
             input,
             offset: 0,
@@ -185,7 +191,7 @@ impl<'input, T, Extras> Scanner<'input, T, Extras> {
         }
     }
 
-    /// Returns the complete input string.
+    /// Returns the complete input source.
     ///
     /// # Examples
     ///
@@ -201,11 +207,15 @@ impl<'input, T, Extras> Scanner<'input, T, Extras> {
     /// assert_eq!(Token::scan("word").source(), "word");
     /// ```
     #[inline(always)]
-    pub const fn source(&self) -> &'input str {
+    pub const fn source(&self) -> &'input Input {
         self.input
     }
 
     /// Returns the input after the current scan position.
+    ///
+    /// # Panics
+    ///
+    /// This function panics if an automaton sets an invalid source position.
     ///
     /// # Examples
     ///
@@ -222,8 +232,10 @@ impl<'input, T, Extras> Scanner<'input, T, Extras> {
     /// let _ = scanner.next();
     /// assert_eq!(scanner.remainder(), " rest");
     /// ```
-    pub fn remainder(&self) -> &'input str {
-        &self.input[self.offset..]
+    pub fn remainder(&self) -> Input::Slice<'input> {
+        self.input
+            .slice(self.offset..self.input.len())
+            .expect("a scanner position is in its source")
     }
 
     /// Returns the byte offset at which the next scan starts.
@@ -262,7 +274,7 @@ impl<'input, T, Extras> Scanner<'input, T, Extras> {
     pub fn bump(&mut self, bytes: usize) {
         let end = self.offset.checked_add(bytes);
         assert!(
-            end.is_some_and(|end| end <= self.input.len() && self.input.is_char_boundary(end)),
+            end.is_some_and(|end| end <= self.input.len() && self.input.is_boundary(end)),
             "invalid scanner bump"
         );
         let Some(end) = end else {
@@ -276,7 +288,7 @@ impl<'input, T, Extras> Scanner<'input, T, Extras> {
     #[inline(always)]
     pub fn __set_position(&mut self, position: usize) {
         debug_assert!(
-            position <= self.input.len() && self.input.is_char_boundary(position),
+            position <= self.input.len() && self.input.is_boundary(position),
             "invalid scanner position"
         );
         self.offset = position;
@@ -288,8 +300,8 @@ impl<'input, T, Extras> Scanner<'input, T, Extras> {
         debug_assert!(
             start <= end
                 && end <= self.input.len()
-                && self.input.is_char_boundary(start)
-                && self.input.is_char_boundary(end),
+                && self.input.is_boundary(start)
+                && self.input.is_boundary(end),
             "invalid scanner match"
         );
         self.offset = end;
@@ -320,13 +332,13 @@ impl<'input, T, Extras> Scanner<'input, T, Extras> {
         self.span
     }
 
-    /// Returns the input text of the most recent token or error.
+    /// Returns the source slice of the most recent token or error.
     ///
     /// The text is empty before the first scan result.
     ///
     /// # Panics
     ///
-    /// Panics if a manually implemented [`Lexer`] reports a span outside its input.
+    /// Panics if a manually implemented [`crate::Lexer`] reports a span outside its input.
     ///
     /// # Examples
     ///
@@ -343,9 +355,9 @@ impl<'input, T, Extras> Scanner<'input, T, Extras> {
     /// let _ = scan.next();
     /// assert_eq!(scan.slice(), "word");
     /// ```
-    pub fn slice(&self) -> &'input str {
-        self.span
-            .text(self.input)
+    pub fn slice(&self) -> Input::Slice<'input> {
+        self.input
+            .slice(self.span.range())
             .expect("a scan span is valid for its input")
     }
 
@@ -367,17 +379,19 @@ impl<'input, T, Extras> Scanner<'input, T, Extras> {
     /// assert_eq!(token.span, Span::new(0, 4));
     /// # Ok::<(), runeweaver::ScanError>(())
     /// ```
-    pub fn spanned(self) -> SpannedScan<'input, T, Extras> {
+    pub fn spanned(self) -> SpannedScan<'input, T, Extras, Input> {
         SpannedScan { scan: self }
     }
 }
 
 /// Iterates over tokens with their byte ranges and scanning errors.
-pub struct SpannedScan<'input, T, Extras = ()> {
-    scan: Scanner<'input, T, Extras>,
+pub struct SpannedScan<'input, T, Extras = (), Input: Source + ?Sized = str> {
+    scan: Scanner<'input, T, Extras, Input>,
 }
 
-impl<'input, T: Lexer<'input>> Scanner<'input, T, T::Extras> {
+impl<'input, T: crate::lexer::Automaton<'input, Input>, Input: Source + ?Sized>
+    Scanner<'input, T, T::Extras, Input>
+{
     #[inline(always)]
     fn apply_mode_action(&mut self, action: ModeAction, start: usize) {
         match action {
@@ -440,7 +454,9 @@ impl<'input, T: Lexer<'input>> Scanner<'input, T, T::Extras> {
     }
 }
 
-impl<'input, T: Lexer<'input>> Iterator for Scanner<'input, T, T::Extras> {
+impl<'input, T: crate::lexer::Automaton<'input, Input>, Input: Source + ?Sized> Iterator
+    for Scanner<'input, T, T::Extras, Input>
+{
     type Item = Result<T, ScanError>;
 
     #[inline(always)]
@@ -452,7 +468,9 @@ impl<'input, T: Lexer<'input>> Iterator for Scanner<'input, T, T::Extras> {
     }
 }
 
-impl<'input, T: Lexer<'input>> Iterator for SpannedScan<'input, T, T::Extras> {
+impl<'input, T: crate::lexer::Automaton<'input, Input>, Input: Source + ?Sized> Iterator
+    for SpannedScan<'input, T, T::Extras, Input>
+{
     type Item = Result<Spanned<T>, ScanError>;
 
     #[inline(always)]

@@ -18,12 +18,12 @@ pub enum ModeAction {
 
 /// The byte-oriented automaton supplied by a generated lexer.
 #[doc(hidden)]
-pub trait Automaton<'input>: Sized {
+pub trait Automaton<'input, Input: crate::Source + ?Sized = str>: Sized {
     /// User state stored in this token type's scanner.
     type Extras;
 
     fn next_token(
-        scanner: &mut Scanner<'input, Self, Self::Extras>,
+        scanner: &mut Scanner<'input, Self, Self::Extras, Input>,
         mode: usize,
     ) -> Option<ScanMatch<Self>>;
     fn mode_name(mode: usize) -> &'static str;

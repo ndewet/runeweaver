@@ -4,8 +4,10 @@
 //! Thompson construction uses these sequences without knowing the target
 //! encoding.
 
+mod bytes;
 mod utf8;
 
+pub(crate) use self::bytes::Bytes;
 pub(crate) use self::utf8::{ByteRange, Utf8};
 
 use super::label::Label;

@@ -77,6 +77,41 @@ Each enum variant defines one token rule. Unit variants produce token kinds;
 single-field tuple variants produce owned payloads. Struct variants, variants
 with multiple fields, and borrowed payloads are rejected at compile time.
 
+## Byte sources
+
+Use `#[lexer(source = [u8])]` to scan raw bytes. Import `ByteLexer` and call
+`scan_bytes` or `scan_bytes_with_extras`:
+
+```rust
+use runeweaver::{ByteLexer, Lexer};
+
+#[derive(Debug, PartialEq, Lexer)]
+#[lexer(source = [u8])]
+enum Token<'input> {
+    #[token(r"\xca\xfe")]
+    Header,
+    #[token(r"[\x80-\xff]+")]
+    Data(&'input [u8]),
+}
+
+let mut scanner = Token::scan_bytes(b"\xca\xfe\xff");
+assert_eq!(scanner.next(), Some(Ok(Token::Header)));
+assert_eq!(scanner.next(), Some(Ok(Token::Data(b"\xff"))));
+```
+
+Byte patterns use the same regex syntax. Each character value from zero
+through 255 names one byte. Character classes use this byte alphabet.
+The scanner preserves borrowed slices, extras, callbacks, modes, and spans.
+Owned byte payloads require a converter. The text converter receives `&[u8]`.
+
+`runeweaver::bytes::ByteMatcher` executes a DFA over bytes or a custom byte
+reader. It reports the last accepted prefix and the traversed range. An
+adapter can select priorities and its own error recovery policy.
+
+The runtime supports `no_std`. Default features enable `alloc` and `derive`.
+Disable default features to use the byte matcher and spans without an
+allocator. Enable `alloc` for the scanner and payload interfaces.
+
 ## Matching semantics
 
 Rules are anchored at the scan's current position. The rule that consumes

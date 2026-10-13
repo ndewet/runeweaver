@@ -2,7 +2,7 @@
 
 use std::{fmt, ops::Range};
 
-/// A half-open range of UTF-8 byte offsets.
+/// A half-open range of source byte offsets.
 ///
 /// An offset is absolute, and it starts at zero at the beginning of a scan.
 /// An offset carries no input identity. Use it with the string that produced
@@ -143,6 +143,22 @@ impl Span {
     /// ```
     #[must_use]
     pub fn text<'a>(&self, input: &'a str) -> Option<&'a str> {
+        input.get(self.range())
+    }
+
+    /// Returns the byte slice identified by this span.
+    ///
+    /// Returns `None` for a reversed range or a range outside the source.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use runeweaver::Span;
+    /// assert_eq!(Span::new(1, 3).bytes(b"\x00\xff\x80"), Some(&b"\xff\x80"[..]));
+    /// assert_eq!(Span::new(0, 4).bytes(b"abc"), None);
+    /// ```
+    #[must_use]
+    pub fn bytes<'input>(&self, input: &'input [u8]) -> Option<&'input [u8]> {
         input.get(self.range())
     }
 }
