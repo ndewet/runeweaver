@@ -18,8 +18,6 @@ extern crate self as runeweaver;
 #[cfg(feature = "derive")]
 pub use runeweaver_derive::Lexer;
 
-#[cfg(feature = "alloc")]
-mod byte_lexer;
 pub mod bytes;
 #[doc(hidden)]
 #[cfg(feature = "alloc")]
@@ -32,8 +30,6 @@ mod scan;
 mod source;
 mod span;
 
-#[cfg(feature = "alloc")]
-pub use byte_lexer::ByteLexer;
 #[cfg(feature = "alloc")]
 pub use lexer::Lexer;
 #[cfg(feature = "alloc")]

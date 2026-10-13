@@ -1,6 +1,6 @@
 //! Checks native byte scanning and shared byte matching.
 
-use runeweaver::{ByteLexer, ByteScanner, Lexer, ScanError, Span, bytes::ByteMatcher};
+use runeweaver::{ByteScanner, Lexer, ScanError, Span, bytes::ByteMatcher};
 
 #[derive(Debug, PartialEq, Lexer)]
 #[lexer(source = [u8])]
@@ -17,7 +17,7 @@ enum Binary<'input> {
 #[test]
 fn bytes_are_not_decoded_and_payloads_borrow_the_original_input() {
     let input = b"\x00\xca\xfe\x00\x80\xffword!";
-    let mut scanner = Binary::scan_bytes(input);
+    let mut scanner = Binary::scan(input);
     assert_eq!(scanner.next(), Some(Ok(Binary::Header)));
     assert_eq!(scanner.span(), Span::new(1, 3));
     assert_eq!(scanner.next(), Some(Ok(Binary::Data(&input[4..6]))));
@@ -79,7 +79,7 @@ fn include_byte<'input>(
 
 #[test]
 fn byte_callbacks_bump_the_input_and_preserve_modes_and_extras() {
-    let mut scanner = Stateful::scan_bytes_with_extras(b"\x00\xfe\xff\x80\xfe", 5);
+    let mut scanner = Stateful::scan_with_extras(b"\x00\xfe\xff\x80\xfe", 5);
     assert_eq!(scanner.next(), Some(Ok(Stateful::Start)));
     assert_eq!(scanner.extras, 6);
     assert_eq!(scanner.next(), Some(Ok(Stateful::End(b"\xff\x80"))));
@@ -114,7 +114,7 @@ fn reject(bytes: &[u8]) -> Result<u8, &'static str> {
 
 #[test]
 fn byte_payload_errors_apply_mode_actions_and_scanning_continues() {
-    let mut scanner = Fallible::scan_bytes(b"\xfe\xffa");
+    let mut scanner = Fallible::scan(b"\xfe\xffa");
     assert_eq!(
         scanner.next(),
         Some(Err(ScanError::InvalidPayload {
@@ -166,7 +166,7 @@ fn shared_matching_preserves_the_last_accept_and_the_failed_prefix() {
 
 #[test]
 fn spanned_byte_scanning_preserves_absolute_offsets() {
-    let results: Vec<_> = AnyByte::scan_bytes(b"\xff\x80")
+    let results: Vec<_> = AnyByte::scan(b"\xff\x80")
         .spanned()
         .collect::<Result<_, _>>()
         .expect("valid bytes");
@@ -177,5 +177,5 @@ fn spanned_byte_scanning_preserves_absolute_offsets() {
 #[test]
 #[should_panic(expected = "invalid scanner bump")]
 fn byte_bumps_cannot_pass_the_end_of_input() {
-    AnyByte::scan_bytes(b"\xff").bump(2);
+    AnyByte::scan(b"\xff").bump(2);
 }

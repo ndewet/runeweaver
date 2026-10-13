@@ -29,7 +29,7 @@ pub trait Automaton<'input, Input: crate::Source + ?Sized = str>: Sized {
     fn mode_name(mode: usize) -> &'static str;
 }
 
-/// Scans UTF-8 input with a generated lexer.
+/// Scans strings or raw bytes with a generated lexer.
 ///
 /// Only the [`Lexer`](macro@crate::Lexer) derive macro implements this trait.
 ///
@@ -48,7 +48,21 @@ pub trait Automaton<'input, Input: crate::Source + ?Sized = str>: Sized {
 /// assert_eq!(token, Token::Word);
 /// # Ok::<(), runeweaver::ScanError>(())
 /// ```
-pub trait Lexer<'input>: Automaton<'input> + Sized {
+///
+/// Select raw bytes with `#[lexer(source = [u8])]`:
+///
+/// ```
+/// use runeweaver::Lexer;
+///
+/// #[derive(Debug, PartialEq, Lexer)]
+/// #[lexer(source = [u8])]
+/// enum Token { #[token(r"\xff")] Byte }
+///
+/// assert_eq!(Token::scan(b"\xff").next(), Some(Ok(Token::Byte)));
+/// ```
+pub trait Lexer<'input, Input: crate::Source + ?Sized = str>:
+    Automaton<'input, Input> + Sized
+{
     /// Scans tokens from `input`.
     ///
     /// # Examples
@@ -64,7 +78,7 @@ pub trait Lexer<'input>: Automaton<'input> + Sized {
     ///
     /// assert_eq!(Token::scan("word").count(), 1);
     /// ```
-    fn scan(input: &'input str) -> Scanner<'input, Self, Self::Extras>
+    fn scan(input: &'input Input) -> Scanner<'input, Self, Self::Extras, Input>
     where
         Self::Extras: Default,
     {
@@ -92,11 +106,14 @@ pub trait Lexer<'input>: Automaton<'input> + Sized {
     /// assert_eq!(scanner.extras, 4);
     /// ```
     fn scan_with_extras(
-        input: &'input str,
+        input: &'input Input,
         extras: Self::Extras,
-    ) -> Scanner<'input, Self, Self::Extras> {
+    ) -> Scanner<'input, Self, Self::Extras, Input> {
         Scanner::with_extras(input, extras)
     }
 }
 
-impl<'input, T: Automaton<'input>> Lexer<'input> for T {}
+impl<'input, Input: crate::Source + ?Sized, T: Automaton<'input, Input>> Lexer<'input, Input>
+    for T
+{
+}

@@ -79,11 +79,11 @@ with multiple fields, and borrowed payloads are rejected at compile time.
 
 ## Byte sources
 
-Use `#[lexer(source = [u8])]` to scan raw bytes. Import `ByteLexer` and call
-`scan_bytes` or `scan_bytes_with_extras`:
+Use `#[lexer(source = [u8])]` to scan raw bytes. Import `Lexer` and call
+`scan` or `scan_with_extras`:
 
 ```rust
-use runeweaver::{ByteLexer, Lexer};
+use runeweaver::Lexer;
 
 #[derive(Debug, PartialEq, Lexer)]
 #[lexer(source = [u8])]
@@ -94,7 +94,7 @@ enum Token<'input> {
     Data(&'input [u8]),
 }
 
-let mut scanner = Token::scan_bytes(b"\xca\xfe\xff");
+let mut scanner = Token::scan(b"\xca\xfe\xff");
 assert_eq!(scanner.next(), Some(Ok(Token::Header)));
 assert_eq!(scanner.next(), Some(Ok(Token::Data(b"\xff"))));
 ```
