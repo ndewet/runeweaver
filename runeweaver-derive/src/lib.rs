@@ -50,7 +50,7 @@ use syn::{
 /// # }
 /// # pub type ScanMatch<T> = Result<(Option<T>, ModeAction), (crate::ScanError, ModeAction)>;
 /// # pub trait Automaton: Sized {
-/// #     fn next_token<E>(scanner: &mut crate::Scanner<'_, Self, E>, mode: usize) -> Option<ScanMatch<Self>>;
+/// #     fn next_token(scanner: &mut crate::Scanner<'_, Self, impl Sized>, mode: usize) -> Option<ScanMatch<Self>>;
 /// #     fn mode_name(mode: usize) -> &'static str;
 /// # }
 /// # }
@@ -179,8 +179,8 @@ fn derive_lexer_inner(input: DeriveInput) -> Result<proc_macro2::TokenStream> {
 
         impl #impl_generics #runtime::lexer::Automaton for #ident #type_generics #where_clause {
             #[inline(always)]
-            fn next_token<Extras>(
-                scanner: &mut #runtime::Scanner<'_, Self, Extras>,
+            fn next_token(
+                scanner: &mut #runtime::Scanner<'_, Self, impl Sized>,
                 mode: usize,
             ) -> Option<#runtime::lexer::ScanMatch<Self>> {
                 Self::__runeweaver_next(scanner, mode)

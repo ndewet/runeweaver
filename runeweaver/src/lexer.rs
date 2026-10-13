@@ -19,8 +19,8 @@ pub enum ModeAction {
 /// The byte-oriented automaton supplied by a generated lexer.
 #[doc(hidden)]
 pub trait Automaton: Sized {
-    fn next_token<Extras>(
-        scanner: &mut Scanner<'_, Self, Extras>,
+    fn next_token(
+        scanner: &mut Scanner<'_, Self, impl Sized>,
         mode: usize,
     ) -> Option<ScanMatch<Self>>;
     fn mode_name(mode: usize) -> &'static str;
