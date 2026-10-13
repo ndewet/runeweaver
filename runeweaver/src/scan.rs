@@ -232,7 +232,7 @@ impl<'input, T, Extras, Input: Source + ?Sized> Scanner<'input, T, Extras, Input
     /// let _ = scanner.next();
     /// assert_eq!(scanner.remainder(), " rest");
     /// ```
-    pub fn remainder(&self) -> Input::Slice<'input> {
+    pub fn remainder(&self) -> &'input Input {
         self.input
             .slice(self.offset..self.input.len())
             .expect("a scanner position is in its source")
@@ -355,7 +355,7 @@ impl<'input, T, Extras, Input: Source + ?Sized> Scanner<'input, T, Extras, Input
     /// let _ = scan.next();
     /// assert_eq!(scan.slice(), "word");
     /// ```
-    pub fn slice(&self) -> Input::Slice<'input> {
+    pub fn slice(&self) -> &'input Input {
         self.input
             .slice(self.span.range())
             .expect("a scan span is valid for its input")

@@ -403,7 +403,18 @@ pub fn compile_with_modes_at(
         lifetime: source_lifetime,
         bounds: quote!(),
     };
-    compile_with_modes_and_extras_at(runtime, extras, source, modes, specifications, true, true)
+    compile_for_source(
+        CompileOptions {
+            runtime,
+            extras,
+            source,
+            source_kind: SourceKind::Str,
+            uses_scanner: true,
+            uses_source: true,
+        },
+        modes,
+        specifications,
+    )
 }
 
 /// Defines the input lifetime used by generated scanner methods.
@@ -458,31 +469,6 @@ pub struct CompileOptions {
     pub uses_scanner: bool,
     /// Whether tokens borrow the input.
     pub uses_source: bool,
-}
-
-/// Builds a string lexer with a declared scanner state type.
-#[doc(hidden)]
-pub fn compile_with_modes_and_extras_at(
-    runtime: TokenStream,
-    extras: TokenStream,
-    source: SourceLifetime,
-    modes: Vec<String>,
-    specifications: Vec<RuleSpec>,
-    uses_scanner: bool,
-    uses_source: bool,
-) -> Result<TokenStream, CompileError> {
-    compile_for_source(
-        CompileOptions {
-            runtime,
-            extras,
-            source,
-            source_kind: SourceKind::Str,
-            uses_scanner,
-            uses_source,
-        },
-        modes,
-        specifications,
-    )
 }
 
 /// Builds a lexer for the configured source representation.

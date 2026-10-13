@@ -6,11 +6,6 @@ use core::ops::Range;
 ///
 /// Implemented for `str` and `[u8]`. String scanners preserve UTF-8 boundaries.
 pub trait Source: private::Sealed {
-    /// A borrowed slice of this source.
-    type Slice<'input>
-    where
-        Self: 'input;
-
     /// Returns the source bytes.
     ///
     /// # Examples
@@ -53,7 +48,7 @@ pub trait Source: private::Sealed {
     /// use runeweaver::Source;
     /// assert_eq!(Source::slice("λx", 0..2), Some("λ"));
     /// ```
-    fn slice(&self, range: Range<usize>) -> Option<Self::Slice<'_>>;
+    fn slice(&self, range: Range<usize>) -> Option<&Self>;
 
     /// Returns whether an offset is a valid slice boundary.
     ///
@@ -68,7 +63,6 @@ pub trait Source: private::Sealed {
 }
 
 impl Source for str {
-    type Slice<'input> = &'input str;
     fn as_bytes(&self) -> &[u8] {
         str::as_bytes(self)
     }
@@ -81,7 +75,6 @@ impl Source for str {
 }
 
 impl Source for [u8] {
-    type Slice<'input> = &'input [u8];
     fn as_bytes(&self) -> &[u8] {
         self
     }
