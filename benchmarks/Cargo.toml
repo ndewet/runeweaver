@@ -7,6 +7,10 @@ rust-version = "1.86"
 
 [workspace]
 
+[profile.bench]
+codegen-units = 1
+lto = "thin"
+
 [dev-dependencies]
 criterion = "0.8.2"
 quote = "1"
