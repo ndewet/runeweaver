@@ -32,6 +32,9 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      - name: Check allocation-free runtime
+        run: cargo check -p runeweaver --no-default-features
+
       - name: Formatting
         run: |
           cargo fmt --all -- --check

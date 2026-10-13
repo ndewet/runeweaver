@@ -133,16 +133,16 @@ function applyVersion(version) {
   }
   for (const [manifest, packageName] of DEPENDENCY_MANIFESTS) {
     const dependencyPattern = new RegExp(
-      `^${packageName} = \\{ version = "=[^"]+", path = "([^"]+)" \\}$`,
+      `^${packageName} = \\{ version = "=[^"]+", path = "([^"]+)"(, (?:optional = true|default-features = false))? \\}$`,
       "m",
     );
     const contents = readFileSync(manifest, "utf8");
-    const expected = `${packageName} = { version = "=${formatted}",`;
+    const expected = `${packageName} = { version = "=${formatted}",`;         `${packageName} = { version = "=${formatted}", path = "$1"$2 }`,
     if (!contents.includes(expected)) {
       replaceOnce(
         manifest,
         dependencyPattern,
-        `${packageName} = { version = "=${formatted}", path = "$1" }`,
+    const expected = `${packageName} = { version = "=${formatted}",`;         `${packageName} = { version = "=${formatted}", path = "$1"$2 }`,
       );
     }
   }
