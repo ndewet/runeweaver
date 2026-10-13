@@ -1,6 +1,6 @@
 //! The public lexer trait and the automaton interface used by generated lexers.
 
-use crate::{Scanner, Span};
+use crate::Scanner;
 
 /// A generated scan result and its mode action.
 #[doc(hidden)]
@@ -20,9 +20,7 @@ pub enum ModeAction {
 #[doc(hidden)]
 pub trait Automaton: Sized {
     fn next_token(
-        input: &str,
-        offset: &mut usize,
-        span: &mut Span,
+        scanner: &mut Scanner<'_, Self, impl Sized>,
         mode: usize,
     ) -> Option<ScanMatch<Self>>;
     fn mode_name(mode: usize) -> &'static str;

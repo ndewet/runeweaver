@@ -27,7 +27,14 @@ use syn::{
 /// # extern crate self as runeweaver;
 /// # #[derive(Clone, Copy)]
 /// # pub struct Span;
-/// # impl Span { pub fn new(_: usize, _: usize) -> Self { Self } }
+/// # pub struct Scanner<'a, T, E = ()> { input: &'a str, offset: usize, span: Span, marker: std::marker::PhantomData<(T, E)> }
+/// # impl<'a, T, E> Scanner<'a, T, E> {
+/// #     pub fn source(&self) -> &'a str { self.input }
+/// #     pub fn position(&self) -> usize { self.offset }
+/// #     pub fn span(&self) -> Span { self.span }
+/// #     pub fn __set_position(&mut self, position: usize) { self.offset = position; }
+/// #     pub fn __set_match(&mut self, _: usize, end: usize) { self.offset = end; }
+/// # }
 /// # pub struct ScanError;
 /// # impl ScanError {
 /// #     pub fn unrecognized(_: Span) -> Self { Self }
@@ -43,7 +50,7 @@ use syn::{
 /// # }
 /// # pub type ScanMatch<T> = Result<(Option<T>, ModeAction), (crate::ScanError, ModeAction)>;
 /// # pub trait Automaton: Sized {
-/// #     fn next_token(input: &str, offset: &mut usize, span: &mut crate::Span, mode: usize) -> Option<ScanMatch<Self>>;
+/// #     fn next_token(scanner: &mut crate::Scanner<'_, Self, impl Sized>, mode: usize) -> Option<ScanMatch<Self>>;
 /// #     fn mode_name(mode: usize) -> &'static str;
 /// # }
 /// # }
@@ -173,12 +180,10 @@ fn derive_lexer_inner(input: DeriveInput) -> Result<proc_macro2::TokenStream> {
         impl #impl_generics #runtime::lexer::Automaton for #ident #type_generics #where_clause {
             #[inline(always)]
             fn next_token(
-                input: &str,
-                offset: &mut usize,
-                span: &mut #runtime::Span,
+                scanner: &mut #runtime::Scanner<'_, Self, impl Sized>,
                 mode: usize,
             ) -> Option<#runtime::lexer::ScanMatch<Self>> {
-                Self::__runeweaver_next(input, offset, span, mode)
+                Self::__runeweaver_next(scanner, mode)
             }
 
             fn mode_name(mode: usize) -> &'static str {
