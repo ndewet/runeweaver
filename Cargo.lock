@@ -93,6 +93,7 @@ dependencies = [
 name = "runeweaver-logos-shim"
 version = "0.2.0"
 dependencies = [
+ "runeweaver",
  "runeweaver-logos-shim-derive",
 ]
 

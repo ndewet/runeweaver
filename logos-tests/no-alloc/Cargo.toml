@@ -1,0 +1,13 @@
+[workspace]
+
+[package]
+name = "logos-no-alloc"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+logos = { package = "runeweaver-logos-shim", path = "../../runeweaver-logos-shim", default-features = false, features = ["export_derive", "forbid_unsafe"] }
+
+[profile.dev]
+panic = "abort"

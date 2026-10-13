@@ -32,6 +32,9 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      - name: Check allocation-free runtime
+        run: cargo check -p runeweaver --no-default-features
+
       - name: Formatting
         run: |
           cargo fmt --all -- --check
@@ -51,6 +54,7 @@ jobs:
           cargo test --manifest-path logos-tests/Cargo.toml --locked --all-features
           cargo check -p runeweaver-logos-shim --no-default-features
           cargo check -p runeweaver-logos-shim --no-default-features --features export_derive,forbid_unsafe
+          cargo check --manifest-path logos-tests/no-alloc/Cargo.toml --locked
 
       - name: Release test
         run: cargo test --workspace --release

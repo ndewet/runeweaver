@@ -28,7 +28,8 @@ Its Rust test sources and assertions stay unchanged. Compile-fail snapshots
 use Runeweaver diagnostics. CI checks default and safe source configurations.
 
 Runeweaver builds and minimizes the DFA. The shim uses `regex-syntax` to
-parse Logos patterns. The runtime does not depend on Logos or a regex engine.
+parse Logos patterns. The runtime uses Runeweaver's shared byte matcher.
+It does not depend on Logos or a regex engine, and needs no allocator.
 The `debug` and `state_machine_codegen` feature names are accepted. Runeweaver
 always generates its own state machine. Graph exports show the Runeweaver DFA.
 

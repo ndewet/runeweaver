@@ -16,7 +16,9 @@ fixture, and six compile-fail fixtures. It also compiles the upstream
 ```sh
 cargo test --manifest-path logos-tests/Cargo.toml --locked
 cargo test --manifest-path logos-tests/Cargo.toml --locked --all-features
+cargo check --manifest-path logos-tests/no-alloc/Cargo.toml --locked
 ```
 
 The test sources retain the upstream MIT and Apache 2.0 licenses.
+The additional `no-alloc` binary checks the shim without `std` or an allocator.
 The source repository is <https://github.com/maciejhirsz/logos/tree/v0.16.1/tests>.

@@ -152,6 +152,7 @@ fn derive(input: DeriveInput) -> Result<Tokens> {
         quote!(#state => match byte { #(#edges)* _ => ::core::option::Option::None },)
     }).collect();
     let start = automaton.start;
+    let runtime = quote!(#root::__private::runeweaver);
     let mut extras = config.extras.clone();
     let mut error = config.error.clone();
     let mut source = config.source.clone().unwrap_or_else(|| {
@@ -185,24 +186,25 @@ fn derive(input: DeriveInput) -> Result<Tokens> {
             loop {
                 let base = lexer.__position();
                 if base == #root::Source::len(lexer.source()) { return ::core::option::Option::None; }
-                let mut state = #start;
-                let mut cursor = base;
-                let mut best: ::core::option::Option<(usize, usize)> = ::core::option::Option::None;
-                while let ::core::option::Option::Some(byte) = #root::Source::read::<u8>(lexer.source(), cursor) {
-                    let next = match state { #(#transitions)* _ => ::core::option::Option::None };
-                    let ::core::option::Option::Some(next) = next else { break; };
-                    state = next;
-                    cursor += 1;
-                    if let ::core::option::Option::Some(rule) = match state { #(#accepts)* _ => ::core::option::Option::None } {
-                        best = ::core::option::Option::Some((rule, cursor));
+                struct Rules;
+                impl #runtime::bytes::ByteMatcher for Rules {
+                    fn start() -> usize { #start }
+                    fn transition(state: usize, byte: u8) -> ::core::option::Option<usize> {
+                        match state { #(#transitions)* _ => ::core::option::Option::None }
+                    }
+                    fn accept(state: usize) -> ::core::option::Option<usize> {
+                        match state { #(#accepts)* _ => ::core::option::Option::None }
                     }
                 }
-                let ::core::option::Option::Some((rule, end)) = best else {
-                    let end = #root::Source::find_boundary(lexer.source(), cursor.max(base + 1));
+                let matched = <Rules as #runtime::bytes::ByteMatcher>::match_source(
+                    |offset| #root::Source::read::<u8>(lexer.source(), offset), base,
+                );
+                let ::core::option::Option::Some(rule) = matched.rule else {
+                    let end = #root::Source::find_boundary(lexer.source(), matched.traversed.max(base + 1));
                     lexer.__set_span(base, end);
                     return ::core::option::Option::Some(::core::result::Result::Err(#default_error));
                 };
-                lexer.__set_span(base, end);
+                lexer.__set_span(base, matched.end);
                 let action = match rule { #(#actions)* _ => unreachable!("invalid Runeweaver rule") };
                 match action {
                     #root::internal::CallbackResult::Emit(token) => return ::core::option::Option::Some(::core::result::Result::Ok(token)),

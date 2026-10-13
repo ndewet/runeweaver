@@ -74,3 +74,8 @@ pub enum FilterResult<T, E> {
 pub fn skip<'source, Token: Logos<'source>>(_: &mut Lexer<'source, Token>) -> Skip {
     Skip
 }
+
+#[doc(hidden)]
+pub mod __private {
+    pub use runeweaver;
+}

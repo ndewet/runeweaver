@@ -16,6 +16,7 @@ publish = ["crates-io"]
 name = "logos"
 
 [dependencies]
+runeweaver = { version = "=0.2.0", path = "../runeweaver", default-features = false }
 runeweaver-logos-shim-derive = { version = "=0.2.0", path = "../runeweaver-logos-shim-derive", optional = true }
 
 [features]
