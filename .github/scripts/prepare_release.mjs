@@ -137,12 +137,12 @@ function applyVersion(version) {
       "m",
     );
     const contents = readFileSync(manifest, "utf8");
-    const expected = `${packageName} = { version = "=${formatted}",`;         `${packageName} = { version = "=${formatted}", path = "$1"$2 }`,
+    const expected = `${packageName} = { version = "=${formatted}",`;
     if (!contents.includes(expected)) {
       replaceOnce(
         manifest,
         dependencyPattern,
-    const expected = `${packageName} = { version = "=${formatted}",`;         `${packageName} = { version = "=${formatted}", path = "$1"$2 }`,
+        `${packageName} = { version = "=${formatted}", path = "$1"$2 }`,
       );
     }
   }
