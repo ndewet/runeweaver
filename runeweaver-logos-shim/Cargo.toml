@@ -1,0 +1,23 @@
+[package]
+name = "runeweaver-logos-shim"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+description = "A Logos-compatible interface backed by Runeweaver"
+readme = "README.md"
+documentation = "https://docs.rs/runeweaver-logos-shim"
+keywords = ["lexer", "logos", "compatibility", "tokenizer"]
+categories = ["parsing", "development-tools"]
+publish = ["crates-io"]
+
+[lib]
+name = "logos"
+
+[dependencies]
+runeweaver = { version = "=0.2.0", path = "../runeweaver" }
+runeweaver-logos-shim-derive = { version = "=0.2.0", path = "../runeweaver-logos-shim-derive" }
+
+[lints]
+workspace = true

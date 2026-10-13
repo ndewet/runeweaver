@@ -21,6 +21,7 @@ Packages are available on crates.io:
 - [`runeweaver`](https://crates.io/crates/runeweaver)
 - [`runeweaver-derive`](https://crates.io/crates/runeweaver-derive)
 - [`runeweaver-codegen`](https://crates.io/crates/runeweaver-codegen)
+- [`runeweaver-logos-shim`](https://crates.io/crates/runeweaver-logos-shim)
 
 Add `runeweaver` to your manifest:
 
@@ -274,6 +275,20 @@ Run an example from the workspace root:
 ```console
 cargo run -p runeweaver --example modes
 ```
+
+## Logos compatibility
+
+The `runeweaver-logos-shim` package supplies the common Logos API with
+Runeweaver as its lexer engine. Rename the dependency to keep existing
+`logos` imports:
+
+```toml
+[dependencies]
+logos = { package = "runeweaver-logos-shim", version = "0.2" }
+```
+
+See the [shim compatibility list](runeweaver-logos-shim/README.md) before you
+replace Logos in an existing project.
 
 ## Stability and support
 

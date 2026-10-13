@@ -11,6 +11,9 @@ const MANIFEST = resolve(ROOT, "Cargo.toml");
 const DEPENDENCY_MANIFESTS = [
   [resolve(ROOT, "runeweaver/Cargo.toml"), "runeweaver-derive"],
   [resolve(ROOT, "runeweaver-derive/Cargo.toml"), "runeweaver-codegen"],
+  [resolve(ROOT, "runeweaver-logos-shim/Cargo.toml"), "runeweaver"],
+  [resolve(ROOT, "runeweaver-logos-shim/Cargo.toml"), "runeweaver-logos-shim-derive"],
+  [resolve(ROOT, "runeweaver-logos-shim-derive/Cargo.toml"), "runeweaver-codegen"],
 ];
 const VERSION_RE = /^version = "(\d+)\.(\d+)\.(\d+)"$/m;
 const TAG_RE = /^v(\d+)\.(\d+)\.(\d+)$/;

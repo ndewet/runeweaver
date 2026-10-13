@@ -84,6 +84,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "runeweaver-logos-shim"
+version = "0.2.0"
+dependencies = [
+ "runeweaver",
+ "runeweaver-logos-shim-derive",
+]
+
+[[package]]
+name = "runeweaver-logos-shim-derive"
+version = "0.2.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "runeweaver-codegen",
+ "syn",
+]
+
+[[package]]
 name = "serde_core"
 version = "1.0.229"
 source = "registry+https://github.com/rust-lang/crates.io-index"

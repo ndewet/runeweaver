@@ -1,0 +1,21 @@
+[package]
+name = "runeweaver-logos-shim-derive"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+description = "The derive macro for the Runeweaver Logos compatibility crate"
+publish = ["crates-io"]
+
+[lib]
+proc-macro = true
+
+[dependencies]
+proc-macro2 = "1"
+quote = "1"
+runeweaver-codegen = { version = "=0.2.0", path = "../runeweaver-codegen" }
+syn = { version = "3", features = ["full"] }
+
+[lints]
+workspace = true

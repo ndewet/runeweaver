@@ -1,5 +1,11 @@
 [workspace]
-members = ["runeweaver", "runeweaver-codegen", "runeweaver-derive"]
+members = [
+    "runeweaver",
+    "runeweaver-codegen",
+    "runeweaver-derive",
+    "runeweaver-logos-shim",
+    "runeweaver-logos-shim-derive",
+]
 resolver = "3"
 
 [workspace.package]
