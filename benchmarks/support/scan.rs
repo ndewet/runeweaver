@@ -1,5 +1,6 @@
 use criterion::{Criterion, SamplingMode, Throughput};
 use runeweaver::Lexer;
+use runeweaver::lexer::Automaton;
 use std::hint::black_box;
 
 const MINIMUM_INPUT_BYTES: usize = 512 * 1024;
@@ -13,18 +14,20 @@ fn input(source: &str) -> String {
     source.repeat(repetitions)
 }
 
-fn scan<T: Lexer>(input: &str) -> usize
+fn scan<'input, T>(input: &'input str) -> usize
 where
-    T::Extras: Default,
+    T: Lexer<'input>,
+    <T as Automaton<'input>>::Extras: Default,
 {
     T::scan(black_box(input))
         .try_fold(0usize, |count, result| result.map(|_| count + 1))
         .expect("the benchmark source is valid for its token definition")
 }
 
-pub fn benchmark<T: Lexer>(criterion: &mut Criterion, name: &str, source: &str)
+pub fn benchmark<T>(criterion: &mut Criterion, name: &str, source: &str)
 where
-    T::Extras: Default,
+    T: for<'input> Lexer<'input>,
+    for<'input> <T as Automaton<'input>>::Extras: Default,
 {
     let input = input(source);
     let mut group = criterion.benchmark_group(format!("scanning/{name}"));
