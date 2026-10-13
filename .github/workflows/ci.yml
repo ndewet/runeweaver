@@ -55,6 +55,8 @@ jobs:
     if: github.event_name == 'pull_request' && !contains(github.event.pull_request.labels.*.name, 'skip-benchmark')
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    env:
+      CARGO_PROFILE_BENCH_CODEGEN_UNITS: 1
     permissions:
       contents: read
       pull-requests: write
