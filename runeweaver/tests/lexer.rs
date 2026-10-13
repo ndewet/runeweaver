@@ -55,6 +55,20 @@ fn scanner_keeps_user_state_while_it_scans() {
     assert_eq!(scanner.remainder(), "b");
 }
 
+#[derive(Debug, PartialEq, Lexer)]
+enum GenericExtrasToken<Extras: FromStr<Err = std::num::ParseIntError>> {
+    #[token("[0-9]+")]
+    Number(Extras),
+}
+
+#[test]
+fn scanner_generics_do_not_shadow_payload_type_parameters() {
+    assert_eq!(
+        GenericExtrasToken::<u32>::scan("42").next(),
+        Some(Ok(GenericExtrasToken::Number(42))),
+    );
+}
+
 #[derive(Debug, PartialEq, Eq)]
 struct RuleOutput<T> {
     token: Option<T>,
@@ -781,6 +795,21 @@ enum BorrowedToken<'input> {
 
 fn borrow_text(text: &str) -> &str {
     text
+}
+
+#[derive(Debug, PartialEq, Lexer)]
+enum SourceNamedToken<'__runeweaver_source> {
+    #[token("[a-z]+")]
+    Word(&'__runeweaver_source str),
+}
+
+#[test]
+fn borrowed_payloads_do_not_shadow_declared_source_lifetimes() {
+    let input = String::from("word");
+    assert_eq!(
+        SourceNamedToken::scan(&input).next(),
+        Some(Ok(SourceNamedToken::Word("word"))),
+    );
 }
 
 fn borrow_and_count<'input>(

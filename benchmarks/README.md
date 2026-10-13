@@ -12,22 +12,30 @@ cargo bench --manifest-path benchmarks/Cargo.toml
 Criterion warms each case for one second. It then collects 200 samples over at
 least three seconds. Reports use a 99% confidence level and a 1%
 significance level. Flat sampling keeps the duration predictable for operations
-that take several milliseconds. The pull request job has a 15-minute limit.
-CI uses one code generation unit and thin LTO. These settings prevent unrelated
-type changes from repartitioning or relinking benchmark hot paths.
+that take several milliseconds.
+The benchmark profile uses one code generation unit and thin LTO.
+These settings reduce changes caused by compiler partitioning.
+The scan function does not inline into Criterion's iteration loop. This keeps
+the scanner's optimization context separate from the timing harness. Each call
+processes at least 512 KiB, so the call cost is small compared with the scan.
 
-CI checks out and builds the pull request base revision in a separate directory.
-Each revision uses its matching benchmark suite, so API changes remain
-compatible with their benchmark adapters.
+The benchmark timing job is disabled. Machine variation and executable layout
+can produce repeatable timing changes without added scanning work.
+Thus, these measurements do not provide a reliable pull request gate.
+The job configuration stays available for future benchmarking work.
 
-Each case has a separate benchmark executable. CI removes build metadata from
-each executable and compares both revisions. It measures only the cases whose
-runtime content differs.
+CI still checks benchmark formatting, Clippy, and the minimum supported Rust
+version. Local benchmark commands remain available.
 
-CI fails when the lower bound of the mean change exceeds 5%. Therefore, the
-complete 99% confidence interval must show a slowdown greater than 5%. It also
-maintains a pull request comment containing a short table of improvements and
-regressions beyond that threshold; unchanged and uncertain results are omitted.
+For a suspected regression, repeat the comparison and reverse the measurement
+order. First measure the same executable against itself to check machine drift.
+A narrow Criterion interval describes one measurement period. It does not
+exclude changes in CPU frequency, system load, or executable layout between runs.
+Compare optimized assembly when an API change has no expected runtime cost.
+
+Apply benchmark stability changes to both revisions before comparing library
+changes. An unchanged library can produce different results with a new harness.
+For a stack of pull requests, merge the harness changes first and rebase the stack.
 
 ## Add a benchmark
 
@@ -76,5 +84,6 @@ descriptive benchmark identifiers because CI uses them to match both revisions.
 Use deterministic inputs that represent a documented operation. Make each
 iteration do enough work to reduce timer overhead without hiding relevant costs.
 
-Keep benchmark names stable across API changes. CI matches base and pull request
-executables by target name.
+The complete suite must compile against the base revision. API changes need
+matching benchmark adapters for each revision. Keep the benchmark names stable
+when you change those adapters.

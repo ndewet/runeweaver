@@ -319,7 +319,7 @@ impl LexerDefinition {
         &self,
         runtime: &TokenStream,
         extras: &TokenStream,
-        source_bounds: &TokenStream,
+        source: &SourceLifetime,
         uses_scanner: bool,
         uses_source: bool,
     ) -> Result<TokenStream, CompileError> {
@@ -336,7 +336,8 @@ impl LexerDefinition {
             emitter::EmitOptions {
                 runtime,
                 extras,
-                source_bounds,
+                source_lifetime: &source.lifetime,
+                source_bounds: &source.bounds,
                 uses_scanner,
                 uses_source,
             },
@@ -407,10 +408,24 @@ pub fn compile_with_modes_at(
     modes: Vec<String>,
     specifications: Vec<RuleSpec>,
 ) -> Result<TokenStream, CompileError> {
+    let source_lifetime = quote!('__runeweaver_source);
     let extras = quote!(
-        <Self as #runtime::lexer::Automaton<'__runeweaver_source>>::Extras
+        <Self as #runtime::lexer::Automaton<#source_lifetime>>::Extras
     );
-    compile_with_modes_and_extras_at(runtime, extras, quote!(), modes, specifications, true, true)
+    let source = SourceLifetime {
+        lifetime: source_lifetime,
+        bounds: quote!(),
+    };
+    compile_with_modes_and_extras_at(runtime, extras, source, modes, specifications, true, true)
+}
+
+/// Defines the input lifetime used by generated scanner methods.
+#[doc(hidden)]
+pub struct SourceLifetime {
+    /// The lifetime parameter of the input string.
+    pub lifetime: TokenStream,
+    /// The bounds between the input and token lifetimes.
+    pub bounds: TokenStream,
 }
 
 /// Builds a lexer with a declared scanner state type.
@@ -418,7 +433,7 @@ pub fn compile_with_modes_at(
 pub fn compile_with_modes_and_extras_at(
     runtime: TokenStream,
     extras: TokenStream,
-    source_bounds: TokenStream,
+    source: SourceLifetime,
     modes: Vec<String>,
     specifications: Vec<RuleSpec>,
     uses_scanner: bool,
@@ -508,7 +523,7 @@ pub fn compile_with_modes_and_extras_at(
     LexerDefinition::new(rules, declared_modes).emit(
         &runtime,
         &extras,
-        &source_bounds,
+        &source,
         uses_scanner,
         uses_source,
     )

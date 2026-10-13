@@ -9,6 +9,7 @@ use quote::quote;
 pub(crate) struct EmitOptions<'a> {
     pub runtime: &'a TokenStream,
     pub extras: &'a TokenStream,
+    pub source_lifetime: &'a TokenStream,
     pub source_bounds: &'a TokenStream,
     pub uses_scanner: bool,
     pub uses_source: bool,
@@ -61,6 +62,7 @@ pub(crate) fn emit(
     let EmitOptions {
         runtime,
         extras,
+        source_lifetime,
         source_bounds,
         uses_scanner,
         uses_source,
@@ -124,29 +126,28 @@ pub(crate) fn emit(
         let name = mode.name();
         quote!(#index => #name,)
     });
-    let scanner_generics = match (uses_source, uses_scanner) {
-        (true, true) => quote!(<'__runeweaver_source>),
-        (true, false) => quote!(<'__runeweaver_source, Extras>),
-        (false, true) => quote!(),
-        (false, false) => quote!(<Extras>),
+    let scanner_generics = if uses_source {
+        quote!(<#source_lifetime>)
+    } else {
+        quote!()
     };
     let source_lifetime = if uses_source {
-        quote!('__runeweaver_source)
+        quote!(#source_lifetime)
     } else {
         quote!('_)
     };
     let scanner_extras = uses_scanner
         .then_some(extras)
-        .map_or_else(|| quote!(Extras), |extras| quote!(#extras));
+        .map_or_else(|| quote!(impl Sized), |extras| quote!(#extras));
     let scanner_bounds = uses_source.then(|| {
         quote! {
             where
-                Self: #lexer_runtime::Automaton<'__runeweaver_source>,
+                Self: #lexer_runtime::Automaton<#source_lifetime>,
                 #source_bounds
         }
     });
     let action_text = if uses_source {
-        quote!(&'__runeweaver_source str)
+        quote!(&#source_lifetime str)
     } else {
         quote!(&str)
     };
@@ -276,6 +277,7 @@ mod tests {
         runtime: &TokenStream,
     ) -> TokenStream {
         let extras = quote!(());
+        let source_lifetime = quote!('__runeweaver_source);
         let source_bounds = quote!();
         super::emit(
             dfa,
@@ -284,6 +286,7 @@ mod tests {
             EmitOptions {
                 runtime,
                 extras: &extras,
+                source_lifetime: &source_lifetime,
                 source_bounds: &source_bounds,
                 uses_scanner: false,
                 uses_source: false,
@@ -323,7 +326,7 @@ mod tests {
         assert!(actual.contains("fn __runeweaver_transition"));
         assert!(actual.contains("fn __runeweaver_accept"));
         assert!(actual.contains("fn __runeweaver_select"));
-        assert!(actual.contains("Scanner < '_ , Self , Extras >"));
+        assert!(actual.contains("Scanner < '_ , Self , impl Sized >"));
         assert!(!actual.contains("__runeweaver_select_spanned"));
     }
 

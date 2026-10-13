@@ -50,7 +50,7 @@ function percentage(value) {
   return `${sign}${(value * 100).toFixed(2)}%`;
 }
 
-export function makeReport(results, threshold) {
+export function makeReport(results, threshold, paired = false) {
   const changes = results
     .map((result) => {
       if (result.lowerBound !== null && result.lowerBound > threshold) {
@@ -68,12 +68,17 @@ export function makeReport(results, threshold) {
     "",
     `Changes are shown when the complete 99% confidence interval exceeds ±${(threshold * 100).toFixed(1)}%.`,
   ];
+  if (paired) {
+    lines[2] = `Changes must exceed ±${(threshold * 100).toFixed(1)}% in both measurement orders. The interval covers both 99% confidence intervals.`;
+  }
   if (changes.length === 0) {
     lines.push("", "No improvements or regressions were found.");
   } else {
     lines.push(
       "",
-      "| Benchmark | Difference | 99% confidence interval | Result |",
+      paired
+        ? "| Benchmark | Mean difference | Interval covering both runs | Result |"
+        : "| Benchmark | Difference | 99% confidence interval | Result |",
       "| --- | ---: | ---: | --- |",
     );
     for (const result of changes) {
@@ -91,7 +96,10 @@ function main() {
   const thresholdIndex = args.indexOf("--threshold");
   const threshold = thresholdIndex === -1 ? 0.05 : Number(args[thresholdIndex + 1]);
   const criterionDirectory = resolve(args[0]);
-  const results = loadResults(criterionDirectory);
+  const paired = args.includes("--paired");
+  const results = paired
+    ? JSON.parse(readFileSync(criterionDirectory, "utf8"))
+    : loadResults(criterionDirectory);
   if (results.length === 0) {
     throw new Error(`no Criterion results found in ${criterionDirectory}`);
   }
@@ -99,7 +107,7 @@ function main() {
     throw new Error("Criterion did not compare any benchmarks to the baseline");
   }
 
-  const { report, changes, regressions } = makeReport(results, threshold);
+  const { report, changes, regressions } = makeReport(results, threshold, paired);
   process.stdout.write(report);
   if (process.env.GITHUB_STEP_SUMMARY) {
     appendFileSync(process.env.GITHUB_STEP_SUMMARY, report, "utf8");

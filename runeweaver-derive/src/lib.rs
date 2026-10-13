@@ -8,7 +8,7 @@ use proc_macro::TokenStream;
 use proc_macro_crate::{FoundCrate, crate_name};
 use proc_macro2::{Ident, Span};
 use quote::quote;
-use runeweaver_codegen::{ModeAction, RuleSpec, compile_with_modes_and_extras_at};
+use runeweaver_codegen::{ModeAction, RuleSpec, SourceLifetime, compile_with_modes_and_extras_at};
 use syn::{
     Data, DeriveInput, Error, Expr, Fields, GenericParam, Lifetime, LifetimeParam, LitStr, Result,
     Type,
@@ -188,7 +188,14 @@ fn derive_lexer_inner(input: DeriveInput) -> Result<proc_macro2::TokenStream> {
         .lifetimes()
         .map(|parameter| parameter.lifetime.clone())
         .collect();
-    let source_lifetime = Lifetime::new("'__runeweaver_source", Span::call_site());
+    let mut source_name = "__runeweaver_source".to_owned();
+    while declared_lifetimes
+        .iter()
+        .any(|lifetime| lifetime.ident == source_name)
+    {
+        source_name.push('_');
+    }
+    let source_lifetime = Lifetime::new(&format!("'{source_name}"), Span::call_site());
     let token_source_lifetime = declared_lifetimes.first().cloned();
     let uses_source = token_source_lifetime.is_some();
     let reverse_source_bound = token_source_lifetime
@@ -201,7 +208,10 @@ fn derive_lexer_inner(input: DeriveInput) -> Result<proc_macro2::TokenStream> {
     let matcher = compile_with_modes_and_extras_at(
         runtime.clone(),
         quote!(#extras),
-        source_bounds,
+        SourceLifetime {
+            lifetime: quote!(#source_lifetime),
+            bounds: source_bounds,
+        },
         modes,
         rules,
         uses_scanner,

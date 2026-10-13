@@ -51,8 +51,9 @@ where
 /// [`ScanError::InvalidPayload`](crate::ScanError::InvalidPayload), and the
 /// `Display` of the `Err` value becomes the message of that error.
 ///
-/// Only a variant with a payload accepts a converter. A unit variant has no
-/// payload, and a `skip` rule emits no token.
+/// A text converter requires a variant with a payload. Scanner callbacks
+/// also support unit variants and skip rules. Those callbacks return `()`
+/// or `Result<(), E>`.
 ///
 #[doc(hidden)]
 pub trait PayloadResult<P> {

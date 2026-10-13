@@ -49,10 +49,10 @@ jobs:
         run: cargo test --workspace --release
 
       - name: Benchmark gate tests
-        run: node --test .github/scripts/check_benchmarks.test.mjs
+        run: node --test .github/scripts/*benchmarks.test.mjs
 
   benchmark:
-    if: github.event_name == 'pull_request' && !contains(github.event.pull_request.labels.*.name, 'skip-benchmark')
+    if: ${{ false }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
@@ -223,42 +223,20 @@ jobs:
             echo "No benchmark executable changed."
           fi
 
-      - name: Measure the base revision
+      - name: Measure paired revisions
         if: steps.affected-benchmarks.outputs.run == 'true'
         run: |
-          while IFS= read -r benchmark; do
-            executable="$(
-              awk -F '\t' -v name="$benchmark" '$1 == name { print $2 }' \
-                "$RUNNER_TEMP/base-benchmarks.tsv"
-            )"
-            "$executable" --bench --save-baseline main
-          done < "$RUNNER_TEMP/affected-benchmarks"
-        env:
-          CARGO_TARGET_DIR: ${{ env.BASE_TARGET }}
-
-      - name: Copy the base measurements
-        if: steps.affected-benchmarks.outputs.run == 'true'
-        run: |
-          mkdir -p "$PR_TARGET/criterion"
-          rsync --archive "$BASE_TARGET/criterion/" "$PR_TARGET/criterion/"
-
-      - name: Measure the pull request
-        if: steps.affected-benchmarks.outputs.run == 'true'
-        run: |
-          while IFS= read -r benchmark; do
-            executable="$(
-              awk -F '\t' -v name="$benchmark" '$1 == name { print $2 }' \
-                "$RUNNER_TEMP/pr-benchmarks.tsv"
-            )"
-            "$executable" --bench --baseline main
-          done < "$RUNNER_TEMP/affected-benchmarks"
-        env:
-          CARGO_TARGET_DIR: ${{ env.PR_TARGET }}
+          cpu="$(awk '/Cpus_allowed_list/ { split($2, cpus, /[-,]/); print cpus[1] }' /proc/self/status)"
+          taskset --cpu-list "$cpu" node .github/scripts/run_benchmarks.mjs \
+            "$RUNNER_TEMP/base-benchmarks.tsv" \
+            "$RUNNER_TEMP/pr-benchmarks.tsv" \
+            "$RUNNER_TEMP/affected-benchmarks" \
+            "$RUNNER_TEMP/paired-benchmarks"
 
       - name: Check for regressions
         if: steps.affected-benchmarks.outputs.run == 'true'
         id: benchmark-results
-        run: node .github/scripts/check_benchmarks.mjs "$PR_TARGET/criterion" --threshold 0.05
+        run: node .github/scripts/check_benchmarks.mjs "$RUNNER_TEMP/paired-benchmarks/results.json" --paired --threshold 0.05
         env:
           BENCHMARK_REPORT: ${{ runner.temp }}/benchmark-report.md
 

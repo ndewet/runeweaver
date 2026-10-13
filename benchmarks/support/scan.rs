@@ -14,6 +14,8 @@ fn input(source: &str) -> String {
     source.repeat(repetitions)
 }
 
+// Keep the complete scan separate from Criterion's iteration loop.
+#[inline(never)]
 fn scan<'input, T>(input: &'input str) -> usize
 where
     T: Lexer<'input>,

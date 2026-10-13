@@ -14,6 +14,11 @@ struct Case {
 
 const CASES: &[Case] = &[
     Case {
+        name: "borrowed_payload_outlives_source",
+        message: "`input` does not live long enough",
+        location: "src/bin/borrowed_payload_outlives_source.rs:13:",
+    },
+    Case {
         name: "duplicate_extras",
         message: "error: `extras` can be specified only once",
         location: "src/bin/duplicate_extras.rs:5:1",
