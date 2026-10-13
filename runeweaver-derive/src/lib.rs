@@ -8,7 +8,7 @@ use proc_macro::TokenStream;
 use proc_macro_crate::{FoundCrate, crate_name};
 use proc_macro2::{Ident, Span};
 use quote::quote;
-use runeweaver_codegen::{ModeAction, RuleSpec, compile_with_modes_at};
+use runeweaver_codegen::{ModeAction, RuleSpec, compile_with_modes_and_scanner_at};
 use syn::{
     Data, DeriveInput, Error, Expr, Fields, LitStr, Result, Type,
     parse::{Parse, ParseStream},
@@ -99,11 +99,13 @@ fn derive_lexer_inner(input: DeriveInput) -> Result<proc_macro2::TokenStream> {
         modes,
         mut rules,
         mut patterns,
+        mut uses_scanner,
     } = lexer_attributes(&input.attrs, &runtime)?;
     for variant in data.variants {
         let attribute = rule_attribute(&variant.attrs, &variant.ident)?;
         let pattern = attribute.pattern.clone();
         let converter = attribute.converter;
+        uses_scanner |= matches!(&converter, Some(Converter::Scanner(_)));
         let variant_ident = variant.ident;
         let action = match variant.fields {
             Fields::Unit => match converter {
@@ -174,7 +176,12 @@ fn derive_lexer_inner(input: DeriveInput) -> Result<proc_macro2::TokenStream> {
         patterns.push(pattern);
     }
 
-    let matcher = compile_with_modes_at(runtime.clone(), modes, rules).map_err(|error| {
+    let compile = if uses_scanner {
+        compile_with_modes_and_scanner_at
+    } else {
+        runeweaver_codegen::compile_with_modes_at
+    };
+    let matcher = compile(runtime.clone(), modes, rules).map_err(|error| {
         error.rule_index().map_or_else(
             || Error::new_spanned(input.ident.clone(), error.to_string()),
             |index| {
@@ -215,6 +222,7 @@ struct LexerConfig {
     modes: Vec<String>,
     rules: Vec<RuleSpec>,
     patterns: Vec<LitStr>,
+    uses_scanner: bool,
 }
 
 fn lexer_attributes(
@@ -225,6 +233,7 @@ fn lexer_attributes(
     let mut modes = Vec::new();
     let mut rules = Vec::new();
     let mut patterns = Vec::new();
+    let mut uses_scanner = false;
     attributes
         .iter()
         .filter(|attribute| attribute.path().is_ident("lexer"))
@@ -261,15 +270,18 @@ fn lexer_attributes(
                         "a `skip` rule emits no token, thus it cannot have `with`",
                     ));
                 }
-                Some(Converter::Scanner(converter)) => RuleSpec::emit(
-                    pattern.value(),
-                    quote! {
-                        #runtime::payload::PayloadResult::<()>::into_payload(
-                            (#converter)(scanner),
-                        )
-                        .map(|()| None)
-                    },
-                ),
+                Some(Converter::Scanner(converter)) => {
+                    uses_scanner = true;
+                    RuleSpec::emit(
+                        pattern.value(),
+                        quote! {
+                            #runtime::payload::PayloadResult::<()>::into_payload(
+                                (#converter)(scanner),
+                            )
+                            .map(|()| None)
+                        },
+                    )
+                }
                 None => RuleSpec::skip(pattern.value()),
             };
             rules.push(rule_spec(
@@ -285,6 +297,7 @@ fn lexer_attributes(
         modes,
         rules,
         patterns,
+        uses_scanner,
     })
 }
 
