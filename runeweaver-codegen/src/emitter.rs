@@ -49,6 +49,7 @@ pub(crate) fn emit(
     matcher: &Matcher,
     lexer: &LexerDefinition,
     runtime: &TokenStream,
+    uses_scanner: bool,
 ) -> TokenStream {
     let lexer_runtime = quote!(#runtime::lexer);
     let payload_runtime = quote!(#runtime::payload);
@@ -109,6 +110,11 @@ pub(crate) fn emit(
         let name = mode.name();
         quote!(#index => #name,)
     });
+    let scanner_extras = if uses_scanner {
+        quote!(<Self as #lexer_runtime::Automaton>::Extras)
+    } else {
+        quote!(impl Sized)
+    };
 
     // The UTF-8 DFA accepts complete codepoints, so selected lengths end at character boundaries.
     // Each skipped prefix has the same guarantee; offset + length never exceeds input.len().
@@ -141,7 +147,7 @@ pub(crate) fn emit(
 
         #[inline(always)]
         fn __runeweaver_next(
-            scanner: &mut #runtime::Scanner<'_, Self, impl Sized>,
+            scanner: &mut #runtime::Scanner<'_, Self, #scanner_extras>,
             mode: usize,
         ) -> Option<#lexer_runtime::ScanMatch<Self>> {
             let input = #runtime::Scanner::source(scanner);
@@ -196,6 +202,7 @@ pub(crate) fn emit(
         fn __runeweaver_action(
             rule: usize,
             text: &str,
+            scanner: &mut #runtime::Scanner<'_, Self, #scanner_extras>,
         ) -> (
             Result<Option<Self>, #payload_runtime::PayloadError>,
             #lexer_runtime::ModeAction,
@@ -229,7 +236,7 @@ mod tests {
         lexer: &LexerDefinition,
         runtime: &TokenStream,
     ) -> TokenStream {
-        super::emit(dfa, &Matcher::new(dfa, []), lexer, runtime)
+        super::emit(dfa, &Matcher::new(dfa, []), lexer, runtime, false)
     }
 
     fn lexer(action: TokenStream) -> LexerDefinition {
