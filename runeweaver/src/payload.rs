@@ -1,7 +1,8 @@
 //! Converts what a rule converter returns into a token payload.
 
-use std::fmt::{Display, Formatter};
-use std::str::FromStr;
+use alloc::string::{String, ToString};
+use core::fmt::{Display, Formatter};
+use core::str::FromStr;
 
 /// A failure produced while converting an accepted lexeme into a payload.
 #[doc(hidden)]
@@ -24,12 +25,12 @@ impl PayloadError {
 }
 
 impl Display for PayloadError {
-    fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> core::fmt::Result {
         formatter.write_str(&self.message)
     }
 }
 
-impl std::error::Error for PayloadError {}
+impl core::error::Error for PayloadError {}
 
 /// Parses one owned token payload with its [`FromStr`] implementation.
 #[doc(hidden)]

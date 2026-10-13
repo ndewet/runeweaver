@@ -2,11 +2,18 @@
 //!
 //! Derive [`Lexer`] for a token enum and place one `#[token("pattern")]`
 //! attribute on each variant.
+//!
+//! The runtime uses `core` and `alloc`. Disable the default `derive` feature
+//! when the runtime does not need the derive macro.
 
 #![deny(dead_code)]
+#![no_std]
+
+extern crate alloc;
 
 extern crate self as runeweaver;
 
+#[cfg(feature = "derive")]
 pub use runeweaver_derive::Lexer;
 
 #[doc(hidden)]
