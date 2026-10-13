@@ -52,6 +52,8 @@ pub trait Source: private::Sealed {
 
     /// Returns whether an offset is a valid slice boundary.
     ///
+    /// Returns `false` for offsets beyond the end of the source.
+    ///
     /// # Examples
     ///
     /// ```

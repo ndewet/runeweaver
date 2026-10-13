@@ -274,7 +274,7 @@ impl<'input, T, Extras, Input: Source + ?Sized> Scanner<'input, T, Extras, Input
     pub fn bump(&mut self, bytes: usize) {
         let end = self.offset.checked_add(bytes);
         assert!(
-            end.is_some_and(|end| end <= self.input.len() && self.input.is_boundary(end)),
+            end.is_some_and(|end| self.input.is_boundary(end)),
             "invalid scanner bump"
         );
         let Some(end) = end else {
@@ -287,10 +287,7 @@ impl<'input, T, Extras, Input: Source + ?Sized> Scanner<'input, T, Extras, Input
     #[doc(hidden)]
     #[inline(always)]
     pub fn __set_position(&mut self, position: usize) {
-        debug_assert!(
-            position <= self.input.len() && self.input.is_boundary(position),
-            "invalid scanner position"
-        );
+        debug_assert!(self.input.is_boundary(position), "invalid scanner position");
         self.offset = position;
     }
 
@@ -298,10 +295,7 @@ impl<'input, T, Extras, Input: Source + ?Sized> Scanner<'input, T, Extras, Input
     #[inline(always)]
     pub fn __set_match(&mut self, start: usize, end: usize) {
         debug_assert!(
-            start <= end
-                && end <= self.input.len()
-                && self.input.is_boundary(start)
-                && self.input.is_boundary(end),
+            start <= end && self.input.is_boundary(start) && self.input.is_boundary(end),
             "invalid scanner match"
         );
         self.offset = end;

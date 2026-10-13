@@ -60,9 +60,7 @@ pub trait Automaton<'input, Input: crate::Source + ?Sized = str>: Sized {
 ///
 /// assert_eq!(Token::scan(b"\xff").next(), Some(Ok(Token::Byte)));
 /// ```
-pub trait Lexer<'input, Input: crate::Source + ?Sized = str>:
-    Automaton<'input, Input> + Sized
-{
+pub trait Lexer<'input, Input: crate::Source + ?Sized = str>: Automaton<'input, Input> {
     /// Scans tokens from `input`.
     ///
     /// # Examples
@@ -82,7 +80,7 @@ pub trait Lexer<'input, Input: crate::Source + ?Sized = str>:
     where
         Self::Extras: Default,
     {
-        Scanner::with_extras(input, Self::Extras::default())
+        Scanner::new(input)
     }
 
     /// Scans tokens from `input` with user state.

@@ -151,7 +151,14 @@ fn derive_lexer_inner(input: DeriveInput) -> Result<proc_macro2::TokenStream> {
                     None if matches!(payload_type, Type::Reference(_)) => {
                         return Err(Error::new_spanned(
                             field,
-                            "a borrowed payload other than `&str` needs a converter",
+                            match source_kind {
+                                SourceKind::Str => {
+                                    "a borrowed payload other than `&str` needs a converter"
+                                }
+                                SourceKind::Bytes => {
+                                    "a byte payload needs a converter unless it is `&[u8]`"
+                                }
+                            },
                         ));
                     }
                     None if source_kind == SourceKind::Bytes => {
@@ -327,72 +334,54 @@ fn lexer_attributes(
         .iter()
         .filter(|attribute| attribute.path().is_ident("lexer"))
         .try_for_each(|attribute| {
-            let config: LexerAttribute = attribute.parse_args()?;
-            if config.name == "source" {
-                if source.is_some() {
-                    return Err(Error::new_spanned(
-                        attribute,
-                        "`source` can be specified only once",
-                    ));
-                }
-                let ty = config.extras.expect("the source option has a type");
-                source =
-                    Some(source_kind_of(&ty).ok_or_else(|| {
+            match attribute.parse_args::<LexerAttribute>()? {
+                LexerAttribute::Source(ty) => {
+                    if source.is_some() {
+                        return Err(Error::new_spanned(
+                            attribute,
+                            "`source` can be specified only once",
+                        ));
+                    }
+                    source = Some(source_kind_of(&ty).ok_or_else(|| {
                         Error::new_spanned(ty, "the source must be `str` or `[u8]`")
                     })?);
-                return Ok(());
-            }
-            if config.name == "mode" {
-                let Some(mode) = config.mode else {
-                    unreachable!()
-                };
-                modes.push(mode);
-                return Ok(());
-            }
-            if config.name == "extras" {
-                if extras.is_some() {
-                    return Err(Error::new_spanned(
-                        attribute,
-                        "`extras` can be specified only once",
-                    ));
                 }
-                extras = config.extras;
-                return Ok(());
-            }
-            if config.name != "skip" {
-                return Err(Error::new_spanned(
-                    attribute,
-                    "expected `extras`, `mode`, `source`, or `skip`",
-                ));
-            }
-            let pattern = config.pattern.expect("skip attribute has a pattern");
-            let spec = match config.rule.converter {
-                Some(Converter::Text(_)) => {
-                    return Err(Error::new_spanned(
-                        attribute,
-                        "a `skip` rule emits no token, thus it cannot have `with`",
-                    ));
+                LexerAttribute::Mode(mode) => modes.push(mode),
+                LexerAttribute::Extras(ty) => {
+                    if extras.is_some() {
+                        return Err(Error::new_spanned(
+                            attribute,
+                            "`extras` can be specified only once",
+                        ));
+                    }
+                    extras = Some(ty);
                 }
-                Some(Converter::Scanner(converter)) => {
-                    uses_scanner = true;
-                    RuleSpec::emit(
-                        pattern.value(),
-                        quote! {
-                            #runtime::payload::PayloadResult::<()>::into_payload(
-                                (#converter)(scanner),
+                LexerAttribute::Skip { pattern, rule } => {
+                    let spec = match rule.converter {
+                        Some(Converter::Text(_)) => {
+                            return Err(Error::new_spanned(
+                                attribute,
+                                "a `skip` rule emits no token, thus it cannot have `with`",
+                            ));
+                        }
+                        Some(Converter::Scanner(converter)) => {
+                            uses_scanner = true;
+                            RuleSpec::emit(
+                                pattern.value(),
+                                quote! {
+                                    #runtime::payload::PayloadResult::<()>::into_payload(
+                                        (#converter)(scanner),
+                                    )
+                                    .map(|()| None)
+                                },
                             )
-                            .map(|()| None)
-                        },
-                    )
+                        }
+                        None => RuleSpec::skip(pattern.value()),
+                    };
+                    rules.push(rule_spec(spec, &rule.modes, &rule.mode_action));
+                    patterns.push(pattern);
                 }
-                None => RuleSpec::skip(pattern.value()),
-            };
-            rules.push(rule_spec(
-                spec,
-                &config.rule.modes,
-                &config.rule.mode_action,
-            ));
-            patterns.push(pattern);
+            }
             Ok(())
         })?;
     Ok(LexerConfig {
@@ -416,12 +405,11 @@ fn runtime_path() -> proc_macro2::TokenStream {
     }
 }
 
-struct LexerAttribute {
-    name: String,
-    extras: Option<Type>,
-    mode: Option<String>,
-    pattern: Option<LitStr>,
-    rule: RuleConfig,
+enum LexerAttribute {
+    Source(Type),
+    Extras(Type),
+    Mode(String),
+    Skip { pattern: LitStr, rule: RuleConfig },
 }
 
 struct RuleConfig {
@@ -439,41 +427,34 @@ impl Parse for LexerAttribute {
     fn parse(input: ParseStream<'_>) -> Result<Self> {
         let name: syn::Ident = input.parse()?;
         input.parse::<syn::Token![=]>()?;
-        if name == "mode" {
-            let mode: syn::Ident = input.parse()?;
-            if !input.is_empty() {
-                return Err(input.error("unexpected lexer mode attribute content"));
+        match name.to_string().as_str() {
+            "mode" => {
+                let mode: syn::Ident = input.parse()?;
+                if !input.is_empty() {
+                    return Err(input.error("unexpected lexer mode attribute content"));
+                }
+                Ok(Self::Mode(mode.to_string()))
             }
-            return Ok(Self {
-                name: name.to_string(),
-                extras: None,
-                mode: Some(mode.to_string()),
-                pattern: None,
-                rule: RuleConfig::stay(),
-            });
-        }
-        if name == "extras" || name == "source" {
-            let extras = input.parse()?;
-            if !input.is_empty() {
-                return Err(input.error("unexpected lexer extras attribute content"));
+            "extras" | "source" => {
+                let ty = input.parse()?;
+                if !input.is_empty() {
+                    return Err(input.error(format!("unexpected lexer {name} attribute content")));
+                }
+                Ok(if name == "source" {
+                    Self::Source(ty)
+                } else {
+                    Self::Extras(ty)
+                })
             }
-            return Ok(Self {
-                name: name.to_string(),
-                extras: Some(extras),
-                mode: None,
-                pattern: None,
-                rule: RuleConfig::stay(),
-            });
+            "skip" => Ok(Self::Skip {
+                pattern: input.parse()?,
+                rule: parse_rule_modifiers(input)?,
+            }),
+            _ => Err(Error::new_spanned(
+                name,
+                "expected `extras`, `mode`, `source`, or `skip`",
+            )),
         }
-        let pattern: LitStr = input.parse()?;
-        let rule = parse_rule_modifiers(input)?;
-        Ok(Self {
-            name: name.to_string(),
-            extras: None,
-            mode: None,
-            pattern: Some(pattern),
-            rule,
-        })
     }
 }
 
@@ -621,4 +602,36 @@ fn rule_attribute(attributes: &[syn::Attribute], variant: &syn::Ident) -> Result
         ));
     }
     attribute.parse_args()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn byte_borrowed_payload_errors_name_the_byte_slice_type() {
+        let input = syn::parse_quote! {
+            #[lexer(source = [u8])]
+            enum Token<'input> {
+                #[token("a")]
+                Word(&'input str),
+            }
+        };
+        let error = derive_lexer_inner(input).expect_err("a byte source cannot borrow a string");
+        assert_eq!(
+            error.to_string(),
+            "a byte payload needs a converter unless it is `&[u8]`"
+        );
+    }
+
+    #[test]
+    fn trailing_source_content_is_reported_as_a_source_error() {
+        let error = syn::parse_str::<LexerAttribute>("source = [u8],")
+            .err()
+            .expect("trailing source content is invalid");
+        assert_eq!(
+            error.to_string(),
+            "unexpected lexer source attribute content"
+        );
+    }
 }
