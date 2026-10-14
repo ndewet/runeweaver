@@ -140,9 +140,10 @@ pub(crate) fn emit(
         .then_some(extras)
         .map_or_else(|| quote!(impl Sized), |extras| quote!(#extras));
     let scanner_bounds = uses_source.then(|| {
+        let extras_bound = uses_scanner.then(|| quote!(, Extras = #extras));
         quote! {
             where
-                Self: #lexer_runtime::Automaton<#source_lifetime>,
+                Self: #lexer_runtime::Automaton<#source_lifetime #extras_bound>,
                 #source_bounds
         }
     });
