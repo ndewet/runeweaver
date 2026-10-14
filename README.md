@@ -29,7 +29,7 @@ Add `runeweaver` to your manifest:
 runeweaver = "0.1"
 ```
 
-`runeweaver` requires Rust 1.85 or newer.
+`runeweaver` requires Rust 1.86 or newer.
 
 ## Quick start
 
@@ -74,8 +74,9 @@ assert_eq!(
 ```
 
 Each enum variant defines one token rule. Unit variants produce token kinds;
-single-field tuple variants produce owned payloads. Struct variants, variants
-with multiple fields, and borrowed payloads are rejected at compile time.
+single-field tuple variants produce parsed or borrowed payloads. A `&str`
+payload borrows its text from the input. Other borrowed payloads require a
+converter. Struct variants and variants with multiple fields are rejected.
 
 ## Matching semantics
 
