@@ -99,7 +99,7 @@ impl std::error::Error for ScanError {}
 /// Invalid input and payload errors consume their byte ranges and scanning
 /// continues. A rule's mode action still takes effect when its
 /// payload conversion fails.
-pub struct Scanner<'input, T, Extras = ()> {
+pub struct Scanner<'input, T, Extras = <T as crate::lexer::Automaton<'input>>::Extras> {
     input: &'input str,
     offset: usize,
     span: Span,
@@ -152,7 +152,7 @@ where
     }
 }
 
-impl<'input, T, Extras> Scanner<'input, T, Extras> {
+impl<'input, T: crate::lexer::Automaton<'input>> Scanner<'input, T, T::Extras> {
     /// Creates a scanner for `input` with user state.
     ///
     /// # Examples
@@ -161,15 +161,16 @@ impl<'input, T, Extras> Scanner<'input, T, Extras> {
     /// use runeweaver::{Lexer, Scanner};
     ///
     /// #[derive(Lexer)]
+    /// #[lexer(extras = u32)]
     /// enum Token {
     ///     #[token("[a-z]+")]
     ///     Word,
     /// }
     ///
-    /// let scanner = Scanner::<Token, _>::with_extras("word", 7_u32);
+    /// let scanner = Scanner::<Token>::with_extras("word", 7_u32);
     /// assert_eq!(scanner.extras, 7);
     /// ```
-    pub fn with_extras(input: &'input str, extras: Extras) -> Self {
+    pub fn with_extras(input: &'input str, extras: T::Extras) -> Self {
         Self {
             input,
             offset: 0,
@@ -184,7 +185,9 @@ impl<'input, T, Extras> Scanner<'input, T, Extras> {
             extras,
         }
     }
+}
 
+impl<'input, T, Extras> Scanner<'input, T, Extras> {
     /// Returns the complete input string.
     ///
     /// # Examples
@@ -373,7 +376,7 @@ impl<'input, T, Extras> Scanner<'input, T, Extras> {
 }
 
 /// Iterates over tokens with their byte ranges and scanning errors.
-pub struct SpannedScan<'input, T, Extras = ()> {
+pub struct SpannedScan<'input, T, Extras = <T as crate::lexer::Automaton<'input>>::Extras> {
     scan: Scanner<'input, T, Extras>,
 }
 

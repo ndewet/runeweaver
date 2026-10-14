@@ -88,6 +88,16 @@ fn scanner_keeps_user_state_while_it_scans() {
     assert_eq!(scanner.remainder(), "b");
 }
 
+#[test]
+fn scanner_defaults_use_the_tokens_declared_extras() {
+    let mut scanner: Scanner<'_, StatefulCallbacks> = Scanner::new("word");
+    assert_eq!(scanner.next(), Some(Ok(StatefulCallbacks::Word)));
+    assert_eq!(scanner.extras, 4);
+    let mut spanned: runeweaver::SpannedScan<'_, StatefulCallbacks> = scanner.spanned();
+    spanned.scanner_mut().extras = 7;
+    assert_eq!(spanned.into_scanner().extras, 7);
+}
+
 #[derive(Debug, PartialEq, Lexer)]
 enum GenericExtrasToken<Extras: FromStr<Err = std::num::ParseIntError>> {
     #[token("[0-9]+")]

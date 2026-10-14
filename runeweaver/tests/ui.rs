@@ -14,6 +14,11 @@ struct Case {
 
 const CASES: &[Case] = &[
     Case {
+        name: "mismatched_scanner_extras",
+        message: "<Token as runeweaver::lexer::Automaton<'_>>::Extras = bool",
+        location: "src/bin/mismatched_scanner_extras.rs:11:",
+    },
+    Case {
         name: "borrowed_payload_outlives_source",
         message: "`input` does not live long enough",
         location: "src/bin/borrowed_payload_outlives_source.rs:13:",
