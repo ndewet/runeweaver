@@ -10,6 +10,8 @@ pub struct CompileOptions {
     pub runtime: TokenStream,
     /// User state type.
     pub extras: TokenStream,
+    /// Payload conversion error type.
+    pub error: TokenStream,
     /// Input lifetime and its bounds.
     pub source: SourceLifetime,
     /// Additional lexical modes.

@@ -316,33 +316,14 @@ impl LexerDefinition {
     }
 
     /// Emits this lexer as one private matcher method.
-    fn emit(
-        &self,
-        runtime: &TokenStream,
-        extras: &TokenStream,
-        source: &SourceLifetime,
-        uses_scanner: bool,
-        uses_source: bool,
-    ) -> Result<TokenStream, CompileError> {
+    fn emit(&self, options: emitter::EmitOptions<'_>) -> Result<TokenStream, CompileError> {
         let dfa = self.compile_automaton()?;
         let fused_skips = self.rules().iter().enumerate().filter_map(|(index, rule)| {
             (rule.action().is_skip() && matches!(rule.mode_action(), ResolvedModeAction::Stay))
                 .then_some(index)
         });
         let matcher = crate::ir::Matcher::new(&dfa, fused_skips);
-        Ok(emitter::emit(
-            &dfa,
-            &matcher,
-            self,
-            emitter::EmitOptions {
-                runtime,
-                extras,
-                source_lifetime: &source.lifetime,
-                source_bounds: &source.bounds,
-                uses_scanner,
-                uses_source,
-            },
-        ))
+        Ok(emitter::emit(&dfa, &matcher, self, options))
     }
 }
 
@@ -422,6 +403,7 @@ pub fn compile_with_modes_at(
         CompileOptions {
             runtime,
             extras,
+            error: quote!(::std::string::String),
             source,
             modes,
             uses_scanner: true,
@@ -448,6 +430,7 @@ pub fn compile_with_options(
     let CompileOptions {
         runtime,
         extras,
+        error,
         source,
         modes,
         uses_scanner,
@@ -534,13 +517,15 @@ pub fn compile_with_options(
             rule_index: None,
         });
     }
-    LexerDefinition::new(rules, declared_modes).emit(
-        &runtime,
-        &extras,
-        &source,
+    LexerDefinition::new(rules, declared_modes).emit(emitter::EmitOptions {
+        runtime: &runtime,
+        extras: &extras,
+        error: &error,
+        source_lifetime: &source.lifetime,
+        source_bounds: &source.bounds,
         uses_scanner,
         uses_source,
-    )
+    })
 }
 
 #[cfg(test)]

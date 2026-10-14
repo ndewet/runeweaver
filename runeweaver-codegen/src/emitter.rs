@@ -9,6 +9,7 @@ use quote::quote;
 pub(crate) struct EmitOptions<'a> {
     pub runtime: &'a TokenStream,
     pub extras: &'a TokenStream,
+    pub error: &'a TokenStream,
     pub source_lifetime: &'a TokenStream,
     pub source_bounds: &'a TokenStream,
     pub uses_scanner: bool,
@@ -34,6 +35,7 @@ fn action_arms(
     lexer: &LexerDefinition,
     lexer_runtime: &TokenStream,
     payload_runtime: &TokenStream,
+    error: &TokenStream,
 ) -> Vec<TokenStream> {
     lexer
         .rules()
@@ -44,7 +46,7 @@ fn action_arms(
             let mode_action = mode_action(rule.mode_action(), lexer_runtime);
             quote! {
                 #index => {
-                    let result: Result<Option<Self>, #payload_runtime::PayloadError> = #action;
+                    let result: Result<Option<Self>, #payload_runtime::PayloadError<#error>> = #action;
                     (result, #mode_action)
                 },
             }
@@ -62,6 +64,7 @@ pub(crate) fn emit(
     let EmitOptions {
         runtime,
         extras,
+        error,
         source_lifetime,
         source_bounds,
         uses_scanner,
@@ -117,7 +120,7 @@ pub(crate) fn emit(
             }
         })
         .collect();
-    let actions = action_arms(lexer, &lexer_runtime, &payload_runtime);
+    let actions = action_arms(lexer, &lexer_runtime, &payload_runtime, error);
     // Keep actions directly in the scanner so LLVM can specialize each lexer. The
     // dispatch function also supports the generated automaton's test interface.
     let direct_actions = actions.iter();
@@ -142,7 +145,7 @@ pub(crate) fn emit(
     let scanner_bounds = uses_source.then(|| {
         quote! {
             where
-                Self: #lexer_runtime::Automaton<#source_lifetime>,
+                Self: #lexer_runtime::Automaton<#source_lifetime, Extras = #extras, Error = #error>,
                 #source_bounds
         }
     });
@@ -185,7 +188,7 @@ pub(crate) fn emit(
         fn __runeweaver_next #scanner_generics(
             scanner: &mut #runtime::Scanner<#source_lifetime, Self, #scanner_extras>,
             mode: usize,
-        ) -> #lexer_runtime::ScanStep<Self>
+        ) -> #lexer_runtime::ScanStep<Self, #error>
         #scanner_bounds
         {
             let input = #runtime::Scanner::source(scanner);
@@ -207,7 +210,7 @@ pub(crate) fn emit(
                         .len_utf8();
                     scanner.__set_match(start, cursor);
                     return #lexer_runtime::ScanStep::Matched {
-                        result: Err(#runtime::ScanError::unrecognized(scanner.span())),
+                        result: Err(#runtime::ScanError::<#error>::unrecognized(scanner.span())),
                         action: #lexer_runtime::ModeAction::Stay,
                     };
                 };
@@ -226,7 +229,7 @@ pub(crate) fn emit(
                         let (result, mode_action) = result;
                         return #lexer_runtime::ScanStep::Matched {
                             result: result.map_err(|error| {
-                                #runtime::ScanError::invalid_payload(scanner.span(), error)
+                                #runtime::ScanError::<#error>::invalid_payload(scanner.span(), error)
                             }),
                             action: mode_action,
                         };
@@ -241,7 +244,7 @@ pub(crate) fn emit(
             text: #action_text,
             scanner: &mut #runtime::Scanner<#source_lifetime, Self, #scanner_extras>,
         ) -> (
-            Result<Option<Self>, #payload_runtime::PayloadError>,
+            Result<Option<Self>, #payload_runtime::PayloadError<#error>>,
             #lexer_runtime::ModeAction,
         )
         #scanner_bounds
@@ -285,6 +288,7 @@ mod tests {
             EmitOptions {
                 runtime,
                 extras: &extras,
+                error: &quote!(String),
                 source_lifetime: &source_lifetime,
                 source_bounds: &source_bounds,
                 uses_scanner: false,
@@ -320,7 +324,7 @@ mod tests {
         )
         .to_string();
         assert!(actual.contains("0usize => Some (0usize)"));
-        assert!(actual.contains(":: runeweaver :: lexer :: ScanStep < Self >"));
+        assert!(actual.contains(":: runeweaver :: lexer :: ScanStep < Self , String >"));
         assert!(actual.contains("fn __runeweaver_mode_name"));
         assert!(actual.contains("fn __runeweaver_transition"));
         assert!(actual.contains("fn __runeweaver_accept"));

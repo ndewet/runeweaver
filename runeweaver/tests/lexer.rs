@@ -11,6 +11,7 @@ struct InvalidAutomaton;
 
 impl<'input> Automaton<'input> for InvalidAutomaton {
     type Extras = bool;
+    type Error = String;
 
     fn next_token(scanner: &mut Scanner<'input, Self, bool>, _: usize) -> ScanStep<Self> {
         if scanner.extras {
@@ -127,7 +128,7 @@ fn stay<T>(token: Option<T>) -> RuleOutput<T> {
 
 type GeneratedMatch<T> = Result<(RuleOutput<T>, usize, usize), (ScanError, usize, usize)>;
 
-fn generated_match<'input, T: Automaton<'input> + InspectAutomaton>(
+fn generated_match<'input, T: Automaton<'input, Error = String> + InspectAutomaton>(
     input: &'input str,
     mode: usize,
 ) -> Option<GeneratedMatch<T>>

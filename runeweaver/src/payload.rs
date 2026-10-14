@@ -6,8 +6,8 @@ use std::str::FromStr;
 /// A failure produced while converting an accepted lexeme into a payload.
 #[doc(hidden)]
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PayloadError {
-    message: String,
+pub struct PayloadError<E = String> {
+    message: E,
 }
 
 impl PayloadError {
@@ -17,19 +17,26 @@ impl PayloadError {
             message: message.into(),
         }
     }
+}
 
-    pub(crate) fn into_message(self) -> String {
+impl<E> PayloadError<E> {
+    /// Retains a typed payload conversion error.
+    pub fn from_error(error: E) -> Self {
+        Self { message: error }
+    }
+
+    pub(crate) fn into_message(self) -> E {
         self.message
     }
 }
 
-impl Display for PayloadError {
+impl<E: Display> Display for PayloadError<E> {
     fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str(&self.message)
+        Display::fmt(&self.message, formatter)
     }
 }
 
-impl std::error::Error for PayloadError {}
+impl<E: std::fmt::Debug + Display> std::error::Error for PayloadError<E> {}
 
 /// Parses one owned token payload with its [`FromStr`] implementation.
 #[doc(hidden)]
@@ -79,4 +86,33 @@ impl<P, E: Display> PayloadResult<P> for Result<P, E> {
     fn into_payload(self) -> Result<P, PayloadError> {
         self.map_err(|error| PayloadError::new(error.to_string()))
     }
+}
+
+/// Retains converter errors in the declared error type.
+#[doc(hidden)]
+pub trait TypedPayloadResult<P, E> {
+    /// Converts a payload or result without formatting its error.
+    fn into_typed_payload(self) -> Result<P, PayloadError<E>>;
+}
+
+impl<P, E> TypedPayloadResult<P, E> for P {
+    fn into_typed_payload(self) -> Result<P, PayloadError<E>> {
+        Ok(self)
+    }
+}
+
+impl<P, E, F: Into<E>> TypedPayloadResult<P, E> for Result<P, F> {
+    fn into_typed_payload(self) -> Result<P, PayloadError<E>> {
+        self.map_err(|error| PayloadError::from_error(error.into()))
+    }
+}
+
+/// Parses a payload while retaining its conversion error.
+#[doc(hidden)]
+pub fn parse_typed_payload<T: FromStr, E>(text: &str) -> Result<T, PayloadError<E>>
+where
+    T::Err: Into<E>,
+{
+    text.parse()
+        .map_err(|error: T::Err| PayloadError::from_error(error.into()))
 }

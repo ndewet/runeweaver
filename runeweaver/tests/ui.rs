@@ -14,6 +14,11 @@ struct Case {
 
 const CASES: &[Case] = &[
     Case {
+        name: "duplicate_error",
+        message: "error: `error` can be specified only once",
+        location: "src/bin/duplicate_error.rs:5:1",
+    },
+    Case {
         name: "mismatched_scanner_extras",
         message: "<Token as runeweaver::lexer::Automaton<'_>>::Extras = bool",
         location: "src/bin/mismatched_scanner_extras.rs:11:",

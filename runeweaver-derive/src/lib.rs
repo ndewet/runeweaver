@@ -39,10 +39,10 @@ use syn::{
 /// #     pub fn __set_position(&mut self, position: usize) { self.offset = position; }
 /// #     pub fn __set_match(&mut self, _: usize, end: usize) { self.offset = end; }
 /// # }
-/// # pub struct ScanError;
-/// # impl ScanError {
-/// #     pub fn unrecognized(_: Span) -> Self { Self }
-/// #     pub fn invalid_payload(_: Span, _: payload::PayloadError) -> Self { Self }
+/// # pub struct ScanError<E = String>(std::marker::PhantomData<E>);
+/// # impl<E> ScanError<E> {
+/// #     pub fn unrecognized(_: Span) -> Self { Self(std::marker::PhantomData) }
+/// #     pub fn invalid_payload(_: Span, _: payload::PayloadError<E>) -> Self { Self(std::marker::PhantomData) }
 /// # }
 /// # pub mod lexer {
 /// # use crate::payload::PayloadError;
@@ -52,18 +52,19 @@ use syn::{
 /// #     Push(usize),
 /// #     Pop,
 /// # }
-/// # pub enum ScanStep<T> { Matched { result: Result<Option<T>, crate::ScanError>, action: ModeAction }, End }
+/// # pub enum ScanStep<T, E = String> { Matched { result: Result<Option<T>, crate::ScanError<E>>, action: ModeAction }, End }
 /// # pub trait Automaton<'input>: Sized {
 /// #     type Extras;
-/// #     fn next_token(scanner: &mut crate::Scanner<'input, Self, Self::Extras>, mode: usize) -> ScanStep<Self>;
+/// #     type Error;
+/// #     fn next_token(scanner: &mut crate::Scanner<'input, Self, Self::Extras>, mode: usize) -> ScanStep<Self, Self::Error>;
 /// #     fn mode_name(mode: usize) -> &'static str;
 /// # }
 /// # }
 /// # pub mod payload {
-/// # pub struct PayloadError;
+/// # pub struct PayloadError<E = String>(std::marker::PhantomData<E>);
 /// # impl PayloadError {
 /// #     pub fn new(_: impl Into<String>) -> Self {
-/// #         Self
+/// #         Self(std::marker::PhantomData)
 /// #     }
 /// # }
 /// # }
@@ -99,6 +100,7 @@ fn derive_lexer_inner(input: DeriveInput) -> Result<proc_macro2::TokenStream> {
     let runtime = runtime_path();
     let LexerConfig {
         extras,
+        error,
         modes,
         mut rules,
         mut patterns,
@@ -118,30 +120,39 @@ fn derive_lexer_inner(input: DeriveInput) -> Result<proc_macro2::TokenStream> {
                         "a unit token variant has no payload, thus it cannot have `with`",
                     ));
                 }
-                Some(Converter::Scanner(converter)) => quote! {
-                    #runtime::payload::PayloadResult::<()>::into_payload(
-                        (#converter)(scanner),
-                    )
-                    .map(|()| Some(Self::#variant_ident))
-                },
+                Some(Converter::Scanner(converter)) => {
+                    let converted = convert_payload(
+                        &runtime,
+                        &syn::parse_quote!(()),
+                        error.as_ref(),
+                        quote!((#converter)(scanner)),
+                    );
+                    quote!(#converted.map(|()| Some(Self::#variant_ident)))
+                }
                 None => quote!(Ok(Some(Self::#variant_ident))),
             },
             Fields::Unnamed(fields) if fields.unnamed.len() == 1 => {
                 let field = fields.unnamed.first().expect("one field was checked");
                 let payload_type = &field.ty;
                 let action = match converter {
-                    Some(Converter::Text(converter)) => quote! {
-                        #runtime::payload::PayloadResult::<#payload_type>::into_payload(
-                            (#converter)(text),
-                        )
-                        .map(|payload| Some(Self::#variant_ident(payload)))
-                    },
-                    Some(Converter::Scanner(converter)) => quote! {
-                        #runtime::payload::PayloadResult::<#payload_type>::into_payload(
-                            (#converter)(scanner),
-                        )
-                        .map(|payload| Some(Self::#variant_ident(payload)))
-                    },
+                    Some(Converter::Text(converter)) => {
+                        let converted = convert_payload(
+                            &runtime,
+                            payload_type,
+                            error.as_ref(),
+                            quote!((#converter)(text)),
+                        );
+                        quote!(#converted.map(|payload| Some(Self::#variant_ident(payload))))
+                    }
+                    Some(Converter::Scanner(converter)) => {
+                        let converted = convert_payload(
+                            &runtime,
+                            payload_type,
+                            error.as_ref(),
+                            quote!((#converter)(scanner)),
+                        );
+                        quote!(#converted.map(|payload| Some(Self::#variant_ident(payload))))
+                    }
                     None if is_str_reference(payload_type) => quote! {
                         Ok(Some(Self::#variant_ident(scanner.slice())))
                     },
@@ -150,6 +161,13 @@ fn derive_lexer_inner(input: DeriveInput) -> Result<proc_macro2::TokenStream> {
                             field,
                             "a borrowed payload other than `&str` needs a converter",
                         ));
+                    }
+                    None if error.is_some() => {
+                        let error_type = error.as_ref().expect("the error type is present");
+                        quote! {
+                            #runtime::payload::parse_typed_payload::<#payload_type, #error_type>(text)
+                                .map(|payload| Some(Self::#variant_ident(payload)))
+                        }
                     }
                     None => quote! {
                         #runtime::payload::parse_payload::<#payload_type>(text)
@@ -207,11 +225,13 @@ fn derive_lexer_inner(input: DeriveInput) -> Result<proc_macro2::TokenStream> {
         #(#source_lifetime: #declared_lifetimes,)*
         #reverse_source_bound
     );
+    let error_type = error.unwrap_or_else(|| syn::parse_quote!(::std::string::String));
     let matcher = compile_with_options(
         rules,
         CompileOptions {
             runtime: runtime.clone(),
             extras: quote!(#extras),
+            error: quote!(#error_type),
             source: SourceLifetime {
                 lifetime: quote!(#source_lifetime),
                 bounds: source_bounds,
@@ -260,12 +280,13 @@ fn derive_lexer_inner(input: DeriveInput) -> Result<proc_macro2::TokenStream> {
             for #ident #type_generics #automaton_where_clause
         {
             type Extras = #extras;
+            type Error = #error_type;
 
             #[inline(always)]
             fn next_token(
                 scanner: &mut #runtime::Scanner<#source_lifetime, Self, Self::Extras>,
                 mode: usize,
-            ) -> #runtime::lexer::ScanStep<Self> {
+            ) -> #runtime::lexer::ScanStep<Self, Self::Error> {
                 Self::__runeweaver_next(scanner, mode)
             }
 
@@ -284,8 +305,25 @@ fn is_str_reference(ty: &Type) -> bool {
         && matches!(reference.elem.as_ref(), Type::Path(path) if path.path.is_ident("str"))
 }
 
+fn convert_payload(
+    runtime: &proc_macro2::TokenStream,
+    payload: &Type,
+    error: Option<&Type>,
+    expression: proc_macro2::TokenStream,
+) -> proc_macro2::TokenStream {
+    match error {
+        Some(error) => quote! {
+            #runtime::payload::TypedPayloadResult::<#payload, #error>::into_typed_payload(#expression)
+        },
+        None => quote! {
+            #runtime::payload::PayloadResult::<#payload>::into_payload(#expression)
+        },
+    }
+}
+
 struct LexerConfig {
     extras: Type,
+    error: Option<Type>,
     modes: Vec<String>,
     rules: Vec<RuleSpec>,
     patterns: Vec<LitStr>,
@@ -296,6 +334,22 @@ fn lexer_attributes(
     attributes: &[syn::Attribute],
     runtime: &proc_macro2::TokenStream,
 ) -> Result<LexerConfig> {
+    let mut error = None;
+    for attribute in attributes
+        .iter()
+        .filter(|attribute| attribute.path().is_ident("lexer"))
+    {
+        let config: LexerAttribute = attribute.parse_args()?;
+        if config.name == "error" {
+            if error.is_some() {
+                return Err(Error::new_spanned(
+                    attribute,
+                    "`error` can be specified only once",
+                ));
+            }
+            error = config.extras;
+        }
+    }
     let mut extras = None;
     let mut modes = Vec::new();
     let mut rules = Vec::new();
@@ -306,6 +360,9 @@ fn lexer_attributes(
         .filter(|attribute| attribute.path().is_ident("lexer"))
         .try_for_each(|attribute| {
             let config: LexerAttribute = attribute.parse_args()?;
+            if config.name == "error" {
+                return Ok(());
+            }
             if config.name == "mode" {
                 let Some(mode) = config.mode else {
                     unreachable!()
@@ -326,7 +383,7 @@ fn lexer_attributes(
             if config.name != "skip" {
                 return Err(Error::new_spanned(
                     attribute,
-                    "expected `extras`, `mode`, or `skip`",
+                    "expected `error`, `extras`, `mode`, or `skip`",
                 ));
             }
             let pattern = config.pattern.expect("skip attribute has a pattern");
@@ -339,13 +396,16 @@ fn lexer_attributes(
                 }
                 Some(Converter::Scanner(converter)) => {
                     uses_scanner = true;
+                    let converted = convert_payload(
+                        runtime,
+                        &syn::parse_quote!(()),
+                        error.as_ref(),
+                        quote!((#converter)(scanner)),
+                    );
                     RuleSpec::emit(
                         pattern.value(),
                         quote! {
-                            #runtime::payload::PayloadResult::<()>::into_payload(
-                                (#converter)(scanner),
-                            )
-                            .map(|()| None)
+                            #converted.map(|()| None)
                         },
                     )
                 }
@@ -361,6 +421,7 @@ fn lexer_attributes(
         })?;
     Ok(LexerConfig {
         extras: extras.unwrap_or_else(|| syn::parse_quote!(())),
+        error,
         modes,
         rules,
         patterns,
@@ -415,10 +476,10 @@ impl Parse for LexerAttribute {
                 rule: RuleConfig::stay(),
             });
         }
-        if name == "extras" {
+        if name == "extras" || name == "error" {
             let extras = input.parse()?;
             if !input.is_empty() {
-                return Err(input.error("unexpected lexer extras attribute content"));
+                return Err(input.error("unexpected lexer type attribute content"));
             }
             return Ok(Self {
                 name: name.to_string(),

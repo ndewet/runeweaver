@@ -4,11 +4,11 @@ use crate::Scanner;
 
 /// Identifies a completed match or the end of input.
 #[doc(hidden)]
-pub enum ScanStep<T> {
+pub enum ScanStep<T, E = String> {
     /// Consumes a rule or an unrecognized character.
     Matched {
         /// The emitted token, skipped input, or scan error.
-        result: Result<Option<T>, crate::ScanError>,
+        result: Result<Option<T>, crate::ScanError<E>>,
         /// The mode action, including when conversion fails.
         action: ModeAction,
     },
@@ -38,9 +38,13 @@ pub enum ModeAction {
 pub trait Automaton<'input>: Sized {
     /// User state stored in this token type's scanner.
     type Extras;
+    /// Payload conversion error type.
+    type Error;
 
-    fn next_token(scanner: &mut Scanner<'input, Self, Self::Extras>, mode: usize)
-    -> ScanStep<Self>;
+    fn next_token(
+        scanner: &mut Scanner<'input, Self, Self::Extras>,
+        mode: usize,
+    ) -> ScanStep<Self, Self::Error>;
     fn mode_name(mode: usize) -> &'static str;
 }
 

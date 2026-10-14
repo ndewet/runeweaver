@@ -9,7 +9,7 @@ use std::marker::PhantomData;
 
 /// An error encountered while scanning input.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ScanError {
+pub enum ScanError<E = String> {
     /// No rule accepted the character at this UTF-8 byte range.
     Unrecognized {
         /// The UTF-8 byte range of the unrecognized character.
@@ -19,8 +19,8 @@ pub enum ScanError {
     InvalidPayload {
         /// The UTF-8 byte range matched by the rule with the invalid payload.
         span: Span,
-        /// The payload conversion error's message.
-        message: String,
+        /// The payload conversion error, formatted as text by default.
+        message: E,
     },
     /// Input ended while a pushed lexer mode was still active.
     UnterminatedMode {
@@ -31,7 +31,7 @@ pub enum ScanError {
     },
 }
 
-impl ScanError {
+impl<E> ScanError<E> {
     /// Creates an error for an input character that no rule accepted.
     #[doc(hidden)]
     #[cold]
@@ -46,7 +46,7 @@ impl ScanError {
     #[cold]
     #[inline(never)]
     #[must_use]
-    pub fn invalid_payload(span: Span, error: PayloadError) -> Self {
+    pub fn invalid_payload(span: Span, error: PayloadError<E>) -> Self {
         Self::InvalidPayload {
             span,
             message: error.into_message(),
@@ -79,7 +79,7 @@ impl ScanError {
     }
 }
 
-impl Display for ScanError {
+impl<E: Display> Display for ScanError<E> {
     fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Unrecognized { span } => write!(formatter, "unrecognized input at {span}"),
@@ -93,7 +93,7 @@ impl Display for ScanError {
     }
 }
 
-impl std::error::Error for ScanError {}
+impl<E: std::fmt::Debug + Display> std::error::Error for ScanError<E> {}
 
 /// Holds the mutable state for one scan of an input string.
 ///
@@ -514,7 +514,7 @@ impl<'input, T, Extras> SpannedScan<'input, T, Extras> {
 
 impl<'input, T: Lexer<'input>> Scanner<'input, T, T::Extras> {
     #[inline(always)]
-    fn next_token(&mut self) -> Option<Result<T, ScanError>> {
+    fn next_token(&mut self) -> Option<Result<T, ScanError<T::Error>>> {
         loop {
             if self.offset == self.input.len() {
                 self.finished = true;
@@ -559,7 +559,7 @@ impl<'input, T: Lexer<'input>> Scanner<'input, T, T::Extras> {
 }
 
 impl<'input, T: Lexer<'input>> Iterator for Scanner<'input, T, T::Extras> {
-    type Item = Result<T, ScanError>;
+    type Item = Result<T, ScanError<T::Error>>;
 
     #[inline(always)]
     fn next(&mut self) -> Option<Self::Item> {
@@ -571,7 +571,7 @@ impl<'input, T: Lexer<'input>> Iterator for Scanner<'input, T, T::Extras> {
 }
 
 impl<'input, T: Lexer<'input>> Iterator for SpannedScan<'input, T, T::Extras> {
-    type Item = Result<Spanned<T>, ScanError>;
+    type Item = Result<Spanned<T>, ScanError<T::Error>>;
 
     #[inline(always)]
     fn next(&mut self) -> Option<Self::Item> {

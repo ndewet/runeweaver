@@ -168,6 +168,13 @@ A failed `FromStr` or converter becomes `ScanError::InvalidPayload`. The
 scan consumes that lexeme, reports its span, and continues with subsequent
 input.
 
+Declare `#[lexer(error = MyError)]` to retain typed conversion errors.
+Each fallible converter error and `FromStr` error must convert into `MyError`
+through `Into`. Direct payload converters need no error conversion.
+The iterator returns `ScanError<MyError>`. Its `InvalidPayload.message` field
+contains the error value. Without this attribute, the field contains a string.
+Typed error values need no `Display` implementation unless you format scan errors.
+
 A `&str` payload borrows the matched text from the scanner input:
 
 ```rust

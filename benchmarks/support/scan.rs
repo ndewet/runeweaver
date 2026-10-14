@@ -20,6 +20,7 @@ fn scan<'input, T>(input: &'input str) -> usize
 where
     T: Lexer<'input>,
     <T as Automaton<'input>>::Extras: Default,
+    <T as Automaton<'input>>::Error: std::fmt::Debug,
 {
     T::scan(black_box(input))
         .try_fold(0usize, |count, result| result.map(|_| count + 1))
@@ -30,6 +31,7 @@ pub fn benchmark<T>(criterion: &mut Criterion, name: &str, source: &str)
 where
     T: for<'input> Lexer<'input>,
     for<'input> <T as Automaton<'input>>::Extras: Default,
+    for<'input> <T as Automaton<'input>>::Error: std::fmt::Debug,
 {
     let input = input(source);
     let mut group = criterion.benchmark_group(format!("scanning/{name}"));
