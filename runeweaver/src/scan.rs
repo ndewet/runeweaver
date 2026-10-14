@@ -1,8 +1,9 @@
 //! Token iteration and recoverable scan errors.
 
-use crate::lexer::{ModeAction, ScanStep};
+use crate::lexer::ScanStep;
 use crate::payload::PayloadError;
-use crate::{Lexer, Span, Spanned};
+use crate::state::LexicalState;
+use crate::{Checkpoint, Lexer, ResumeError, Span, Spanned};
 use std::fmt::{Display, Formatter};
 use std::marker::PhantomData;
 
@@ -103,9 +104,9 @@ pub struct Scanner<'input, T, Extras = <T as crate::lexer::Automaton<'input>>::E
     input: &'input str,
     offset: usize,
     span: Span,
-    mode: ModeFrame,
-    parent_modes: Vec<ModeFrame>,
+    state: LexicalState,
     finished: bool,
+    in_rule: bool,
     marker: PhantomData<T>,
     /// User state kept for the lifetime of the scan.
     pub extras: Extras,
@@ -116,12 +117,6 @@ pub struct Scanner<'input, T, Extras = <T as crate::lexer::Automaton<'input>>::E
 /// This alias preserves the original name for [`Scanner`]. New code can name
 /// the stateful object directly.
 pub type Scan<'input, T> = Scanner<'input, T, <T as crate::lexer::Automaton<'input>>::Extras>;
-
-#[derive(Clone, Copy)]
-struct ModeFrame {
-    id: usize,
-    opened_at: usize,
-}
 
 impl<'input, T: crate::lexer::Automaton<'input>> Scanner<'input, T, T::Extras>
 where
@@ -175,19 +170,109 @@ impl<'input, T: crate::lexer::Automaton<'input>> Scanner<'input, T, T::Extras> {
             input,
             offset: 0,
             span: Span::at(0),
-            mode: ModeFrame {
-                id: 0,
-                opened_at: 0,
-            },
-            parent_modes: Vec::new(),
+            state: LexicalState::default(),
             finished: false,
+            in_rule: false,
             marker: PhantomData,
             extras,
         }
     }
+
+    /// Resumes scanning from a checkpoint in an unchanged input prefix.
+    ///
+    /// The caller must check the input revision and replay safety of callbacks.
+    /// The most recent span starts empty at the saved position.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if a saved offset is outside input or splits a codepoint.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use runeweaver::{Lexer, Scanner};
+    /// #[derive(Debug, PartialEq, Lexer)]
+    /// enum Token { #[token("a")] A, #[token("b")] B }
+    /// let mut scan = Token::scan("aa");
+    /// let _ = scan.next();
+    /// let mut resumed = Scanner::resume("ab", scan.checkpoint())?;
+    /// assert_eq!(resumed.next(), Some(Ok(Token::B)));
+    /// # Ok::<(), runeweaver::ResumeError>(())
+    /// ```
+    pub fn resume(
+        input: &'input str,
+        checkpoint: Checkpoint<T, T::Extras>,
+    ) -> Result<Self, ResumeError> {
+        for offset in std::iter::once(checkpoint.position).chain(checkpoint.state.positions()) {
+            if offset > checkpoint.position || !input.is_char_boundary(offset) {
+                return Err(ResumeError { offset });
+            }
+        }
+        Ok(Self {
+            input,
+            offset: checkpoint.position,
+            span: Span::at(checkpoint.position),
+            state: checkpoint.state,
+            finished: false,
+            in_rule: false,
+            marker: PhantomData,
+            extras: checkpoint.extras,
+        })
+    }
 }
 
 impl<'input, T, Extras> Scanner<'input, T, Extras> {
+    /// Saves the current position, modes, and a copy of user state.
+    ///
+    /// # Panics
+    ///
+    /// This function panics if a rule callback requests a checkpoint.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use runeweaver::Lexer;
+    /// #[derive(Lexer)]
+    /// enum Token { #[token("a")] A }
+    /// let scan = Token::scan("a");
+    /// assert_eq!(scan.checkpoint().position(), 0);
+    /// ```
+    pub fn checkpoint(&self) -> Checkpoint<T, Extras>
+    where
+        Extras: Clone,
+    {
+        assert!(!self.in_rule, "a checkpoint requires a completed rule");
+        Checkpoint {
+            position: self.offset,
+            state: self.state.clone(),
+            extras: self.extras.clone(),
+            marker: PhantomData,
+        }
+    }
+
+    /// Saves scan state without copying user state.
+    ///
+    /// # Panics
+    ///
+    /// This function panics if a rule callback requests a checkpoint.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use runeweaver::Lexer;
+    /// #[derive(Lexer)]
+    /// enum Token { #[token("a")] A }
+    /// assert_eq!(Token::scan("a").into_checkpoint().position(), 0);
+    /// ```
+    pub fn into_checkpoint(self) -> Checkpoint<T, Extras> {
+        assert!(!self.in_rule, "a checkpoint requires a completed rule");
+        Checkpoint {
+            position: self.offset,
+            state: self.state,
+            extras: self.extras,
+            marker: PhantomData,
+        }
+    }
     /// Returns the complete input string.
     ///
     /// # Examples
@@ -429,35 +514,11 @@ impl<'input, T, Extras> SpannedScan<'input, T, Extras> {
 
 impl<'input, T: Lexer<'input>> Scanner<'input, T, T::Extras> {
     #[inline(always)]
-    fn apply_mode_action(&mut self, action: ModeAction, start: usize) {
-        match action {
-            ModeAction::Stay => {}
-            ModeAction::Begin(id) => {
-                self.mode.id = id;
-                self.mode.opened_at = start;
-            }
-            ModeAction::Push(id) => {
-                self.parent_modes.push(self.mode);
-                self.mode = ModeFrame {
-                    id,
-                    opened_at: start,
-                };
-            }
-            ModeAction::Pop => {
-                if let Some(parent) = self.parent_modes.pop() {
-                    self.mode = parent;
-                }
-            }
-        }
-    }
-
-    #[inline(always)]
     fn next_token(&mut self) -> Option<Result<T, ScanError>> {
         loop {
             if self.offset == self.input.len() {
                 self.finished = true;
-                if !self.parent_modes.is_empty() {
-                    let frame = self.parent_modes.get(1).unwrap_or(&self.mode);
+                if let Some(frame) = self.state.unclosed() {
                     self.span = Span::new(frame.opened_at, self.offset);
                     return Some(Err(ScanError::unterminated_mode(
                         self.span,
@@ -467,9 +528,12 @@ impl<'input, T: Lexer<'input>> Scanner<'input, T, T::Extras> {
                 return None;
             }
 
-            let mode = self.mode.id;
+            let mode = self.state.mode();
             let position = self.offset;
-            match T::next_token(self, mode) {
+            self.in_rule = true;
+            let step = T::next_token(self, mode);
+            self.in_rule = false;
+            match step {
                 ScanStep::End => {
                     assert_eq!(
                         self.offset,
@@ -482,7 +546,7 @@ impl<'input, T: Lexer<'input>> Scanner<'input, T, T::Extras> {
                         self.offset > position,
                         "a generated match must consume input"
                     );
-                    self.apply_mode_action(action, self.span.start);
+                    self.state.apply(action, self.span.start);
                     match result {
                         Ok(Some(token)) => return Some(Ok(token)),
                         Ok(None) => {}

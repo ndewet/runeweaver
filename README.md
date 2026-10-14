@@ -210,6 +210,18 @@ A scanner converter can inspect `source`, `slice`, and `remainder`. It can use
 `bump` to include more input in the current match. A skip rule can also use
 `with_scanner` to update state without emitting a token.
 
+Use `scanner.checkpoint()` to save the position, modes, and cloned extras.
+Use `scanner.into_checkpoint()` when extras cannot be cloned. Resume with
+`Scanner::resume(input, checkpoint)` after an edit to the input suffix.
+The prefix before the saved position must be unchanged. Checkpoints retain
+mode-opening offsets for diagnostics and use absolute byte positions.
+
+Save checkpoints between completed scan results. A callback cannot save one
+before its rule's mode action takes effect. Callbacks must reproduce their
+results from saved extras. External effects require application-level control.
+Checkpoint context equality alone does not establish that cached results
+can be reused. Input revisions and cache invalidation belong to the caller.
+
 ## Spans and errors
 
 `Token::scan(input)` yields `Result<Token, ScanError>`. The scan retains the
