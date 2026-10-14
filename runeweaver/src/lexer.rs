@@ -2,9 +2,19 @@
 
 use crate::Scanner;
 
-/// A generated scan result and its mode action.
+/// Identifies a completed match or the end of input.
 #[doc(hidden)]
-pub type ScanMatch<T> = Result<(Option<T>, ModeAction), (crate::ScanError, ModeAction)>;
+pub enum ScanStep<T> {
+    /// Consumes a rule or an unrecognized character.
+    Matched {
+        /// The emitted token, skipped input, or scan error.
+        result: Result<Option<T>, crate::ScanError>,
+        /// The mode action, including when conversion fails.
+        action: ModeAction,
+    },
+    /// Ends the scan at the input length.
+    End,
+}
 
 /// A generated lexer rule's update to the mode stack.
 #[doc(hidden)]
@@ -29,10 +39,8 @@ pub trait Automaton<'input>: Sized {
     /// User state stored in this token type's scanner.
     type Extras;
 
-    fn next_token(
-        scanner: &mut Scanner<'input, Self, Self::Extras>,
-        mode: usize,
-    ) -> Option<ScanMatch<Self>>;
+    fn next_token(scanner: &mut Scanner<'input, Self, Self::Extras>, mode: usize)
+    -> ScanStep<Self>;
     fn mode_name(mode: usize) -> &'static str;
 }
 

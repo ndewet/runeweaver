@@ -1,6 +1,6 @@
 //! Token iteration and recoverable scan errors.
 
-use crate::lexer::ModeAction;
+use crate::lexer::{ModeAction, ScanStep};
 use crate::payload::PayloadError;
 use crate::{Lexer, Span, Spanned};
 use std::fmt::{Display, Formatter};
@@ -465,22 +465,26 @@ impl<'input, T: Lexer<'input>> Scanner<'input, T, T::Extras> {
             }
 
             let mode = self.mode.id;
-            let result = T::next_token(self, mode);
-            let Some(result) = result else {
-                continue;
-            };
-
-            let start = self.span.start;
-            match result {
-                Ok((token, mode_action)) => {
-                    self.apply_mode_action(mode_action, start);
-                    if let Some(token) = token {
-                        return Some(Ok(token));
-                    }
+            let position = self.offset;
+            match T::next_token(self, mode) {
+                ScanStep::End => {
+                    assert_eq!(
+                        self.offset,
+                        self.input.len(),
+                        "invalid generated end position"
+                    );
                 }
-                Err((error, mode_action)) => {
-                    self.apply_mode_action(mode_action, start);
-                    return Some(Err(error));
+                ScanStep::Matched { result, action } => {
+                    assert!(
+                        self.offset > position,
+                        "a generated match must consume input"
+                    );
+                    self.apply_mode_action(action, self.span.start);
+                    match result {
+                        Ok(Some(token)) => return Some(Ok(token)),
+                        Ok(None) => {}
+                        Err(error) => return Some(Err(error)),
+                    }
                 }
             }
         }
