@@ -2,10 +2,47 @@
 
 #![deny(dead_code)]
 
-use runeweaver::lexer::{Automaton, ModeAction};
+use runeweaver::lexer::{Automaton, ModeAction, ScanStep};
 use runeweaver::{Lexer, ScanError, Scanner, Span, Spanned};
 use std::convert::Infallible;
 use std::str::FromStr;
+
+#[cfg(debug_assertions)]
+struct InvalidAutomaton;
+
+#[cfg(debug_assertions)]
+impl<'input> Automaton<'input> for InvalidAutomaton {
+    type Extras = bool;
+
+    fn next_token(scanner: &mut Scanner<'input, Self, bool>, _: usize) -> ScanStep<Self> {
+        if scanner.extras {
+            ScanStep::End
+        } else {
+            ScanStep::Matched {
+                result: Ok(None),
+                action: ModeAction::Stay,
+            }
+        }
+    }
+
+    fn mode_name(_: usize) -> &'static str {
+        "INITIAL"
+    }
+}
+
+#[test]
+#[cfg(debug_assertions)]
+#[should_panic(expected = "a generated match must consume input")]
+fn scanner_rejects_a_match_without_progress() {
+    let _ = InvalidAutomaton::scan_with_extras("a", false).next();
+}
+
+#[test]
+#[cfg(debug_assertions)]
+#[should_panic(expected = "invalid generated end position")]
+fn scanner_rejects_end_before_the_input_length() {
+    let _ = InvalidAutomaton::scan_with_extras("a", true).next();
+}
 
 fn first<'input, T: Lexer<'input>>(input: &'input str) -> Option<(T, usize)>
 where
@@ -94,14 +131,19 @@ where
     T::start_state(mode)?;
     let mut scanner = Scanner::<T, <T as Automaton<'input>>::Extras>::new(input);
     match T::next_token(&mut scanner, mode) {
-        Some(Ok((token, mode_action))) => Some(Ok((
+        ScanStep::Matched {
+            result: Ok(token),
+            action: mode_action,
+        } => Some(Ok((
             RuleOutput { token, mode_action },
             0,
             scanner.position(),
         ))),
-        Some(Err((error, _))) => Some(Err((error, scanner.span().start, scanner.span().end))),
-        None if scanner.position() != 0 => Some(Ok((stay(None), 0, scanner.position()))),
-        None => None,
+        ScanStep::Matched {
+            result: Err(error), ..
+        } => Some(Err((error, scanner.span().start, scanner.span().end))),
+        ScanStep::End if scanner.position() != 0 => Some(Ok((stay(None), 0, scanner.position()))),
+        ScanStep::End => None,
     }
 }
 
