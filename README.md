@@ -288,6 +288,10 @@ The supported public surface is the `runeweaver` runtime crate and its re-export
 derive macro. `runeweaver-codegen` is an implementation-facing crate and does not
 carry the same compatibility guarantee.
 
+Hidden runtime items connect generated code to the scanner. They are outside
+the supported public API. Use the derive macro instead of implementing its
+automaton interface by hand.
+
 Rust 1.86 is the minimum supported Rust version. Raising the MSRV requires at
 least a minor release. The latest release line receives bug fixes; there are no
 separate long-term-support branches. Report defects and support requests
