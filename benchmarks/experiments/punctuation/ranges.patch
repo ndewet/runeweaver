@@ -1,0 +1,13 @@
+diff --git a/runeweaver-codegen/src/ir/builder.rs b/runeweaver-codegen/src/ir/builder.rs
+index c694e1d..e69d2e0 100644
+--- a/runeweaver-codegen/src/ir/builder.rs
++++ b/runeweaver-codegen/src/ir/builder.rs
+@@ -133,7 +133,7 @@ impl<'a> Builder<'a> {
+         }
+         let dispatch = if targets.is_empty() {
+             Dispatch::Fail
+-        } else if targets.len() > 2 || targets.values().any(|ranges| ranges.len() > 2) {
++        } else if targets.len() > 256 || targets.values().any(|ranges| ranges.len() > 256) {
+             let dead = targets.len();
+             Dispatch::Table {
+                 values: Box::new(std::array::from_fn(|byte| {

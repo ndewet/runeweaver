@@ -1,0 +1,41 @@
+diff --git a/runeweaver-codegen/src/selector.rs b/runeweaver-codegen/src/selector.rs
+index b8e8329..d8c551f 100644
+--- a/runeweaver-codegen/src/selector.rs
++++ b/runeweaver-codegen/src/selector.rs
+@@ -227,10 +227,17 @@ impl<'a> Renderer<'a> {
+             }
+             Dispatch::Table { values, branches } => {
+                 self.source.push_str("let byte = input[index];");
+-                self.table(branches.len(), values);
+-                self.source.push_str("match FORK[byte as usize] {");
++                self.source.push_str("match byte {");
+                 for (ordinal, transfer) in branches.iter().enumerate() {
+-                    write!(self.source, "{ordinal} => {{").expect("writing to a string succeeds");
++                    let mut first = true;
++                    for (byte, &target) in values.iter().enumerate() {
++                        if target == ordinal {
++                            if !first { self.source.push('|'); }
++                            write!(self.source, "{byte}").expect("writing to a string succeeds");
++                            first = false;
++                        }
++                    }
++                    self.source.push_str(" => {");
+                     self.transfer(transfer);
+                     self.source.push_str("},");
+                 }
+@@ -261,6 +268,7 @@ impl<'a> Renderer<'a> {
+         }
+     }
+
++    #[allow(dead_code)]
+     fn table(&mut self, dead: usize, values: &[usize; 256]) {
+         let Some(width) = table_width(dead) else {
+             let values: Vec<_> = values
+@@ -427,6 +435,7 @@ fn transfer_updates_context(transfer: &Transfer) -> bool {
+     }
+ }
+
++#[allow(dead_code)]
+ fn table_width(dead: usize) -> Option<&'static str> {
+     if u8::try_from(dead).is_ok() {
+         None

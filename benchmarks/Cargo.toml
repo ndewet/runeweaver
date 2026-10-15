@@ -51,6 +51,10 @@ name = "punctuation"
 harness = false
 
 [[bench]]
+name = "punctuation_layout"
+harness = false
+
+[[bench]]
 name = "rust_like"
 harness = false
 

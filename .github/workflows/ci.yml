@@ -49,7 +49,9 @@ jobs:
         run: cargo test --workspace --release
 
       - name: Benchmark gate tests
-        run: node --test .github/scripts/*benchmarks.test.mjs
+        run: |
+          node --test .github/scripts/*benchmarks.test.mjs
+          node --test benchmarks/placement.test.mjs
 
   benchmark:
     if: ${{ false }}

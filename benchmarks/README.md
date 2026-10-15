@@ -33,6 +33,18 @@ A narrow Criterion interval describes one measurement period. It does not
 exclude changes in CPU frequency, system load, or executable layout between runs.
 Compare optimized assembly when an API change has no expected runtime cost.
 
+Compare multiple code placements before you report a scan regression.
+Keep the table placement fixed during this comparison. Report each placement,
+the median across placements, and the best and worst results. A second
+measurement order does not control code placement.
+
+The [punctuation experiment](placement.md) supplies this comparison for three
+callers on Windows x64 MSVC. Its isolated copies use offsets 0, 16, 32, and 48
+within a 64-byte boundary. These offsets do not change production code.
+For other scan cases, use an equivalent placement experiment before you assign
+a timing change to the scanner. The punctuation extraction tool rejects
+retained helpers and does not support those cases.
+
 Apply benchmark stability changes to both revisions before comparing library
 changes. An unchanged library can produce different results with a new harness.
 For a stack of pull requests, merge the harness changes first and rebase the stack.
