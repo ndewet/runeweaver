@@ -14,12 +14,14 @@ mod automata;
 mod compiler;
 mod emitter;
 mod ir;
+mod options;
 mod regex;
 mod selector;
 mod specification;
 
 pub use compiler::{
-    CompileError, SourceLifetime, compile, compile_with_modes, compile_with_modes_and_extras_at,
-    compile_with_modes_at,
+    CompileError, SourceLifetime, compile, compile_with_modes, compile_with_modes_at,
+    compile_with_options,
 };
+pub use options::CompileOptions;
 pub use specification::{ModeAction, RuleSpec};

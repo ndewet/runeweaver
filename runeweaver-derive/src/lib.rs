@@ -8,7 +8,9 @@ use proc_macro::TokenStream;
 use proc_macro_crate::{FoundCrate, crate_name};
 use proc_macro2::{Ident, Span};
 use quote::quote;
-use runeweaver_codegen::{ModeAction, RuleSpec, SourceLifetime, compile_with_modes_and_extras_at};
+use runeweaver_codegen::{
+    CompileOptions, ModeAction, RuleSpec, SourceLifetime, compile_with_options,
+};
 use syn::{
     Data, DeriveInput, Error, Expr, Fields, GenericParam, Lifetime, LifetimeParam, LitStr, Result,
     Type,
@@ -205,17 +207,19 @@ fn derive_lexer_inner(input: DeriveInput) -> Result<proc_macro2::TokenStream> {
         #(#source_lifetime: #declared_lifetimes,)*
         #reverse_source_bound
     );
-    let matcher = compile_with_modes_and_extras_at(
-        runtime.clone(),
-        quote!(#extras),
-        SourceLifetime {
-            lifetime: quote!(#source_lifetime),
-            bounds: source_bounds,
-        },
-        modes,
+    let matcher = compile_with_options(
         rules,
-        uses_scanner,
-        uses_source,
+        CompileOptions {
+            runtime: runtime.clone(),
+            extras: quote!(#extras),
+            source: SourceLifetime {
+                lifetime: quote!(#source_lifetime),
+                bounds: source_bounds,
+            },
+            modes,
+            uses_scanner,
+            uses_source,
+        },
     )
     .map_err(|error| {
         error.rule_index().map_or_else(

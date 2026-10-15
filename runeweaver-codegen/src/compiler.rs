@@ -4,6 +4,7 @@
 //! Automata retain [`RuleId`] values at accepting states; the associated
 //! pattern, action, and mode membership remain here.
 
+use crate::CompileOptions;
 use crate::automata::{
     BuildError, dfa,
     encoding::{ByteRange, Utf8},
@@ -416,7 +417,17 @@ pub fn compile_with_modes_at(
         lifetime: source_lifetime,
         bounds: quote!(),
     };
-    compile_with_modes_and_extras_at(runtime, extras, source, modes, specifications, true, true)
+    compile_with_options(
+        specifications,
+        CompileOptions {
+            runtime,
+            extras,
+            source,
+            modes,
+            uses_scanner: true,
+            uses_source: true,
+        },
+    )
 }
 
 /// Defines the input lifetime used by generated scanner methods.
@@ -430,15 +441,18 @@ pub struct SourceLifetime {
 
 /// Builds a lexer with a declared scanner state type.
 #[doc(hidden)]
-pub fn compile_with_modes_and_extras_at(
-    runtime: TokenStream,
-    extras: TokenStream,
-    source: SourceLifetime,
-    modes: Vec<String>,
+pub fn compile_with_options(
     specifications: Vec<RuleSpec>,
-    uses_scanner: bool,
-    uses_source: bool,
+    options: CompileOptions,
 ) -> Result<TokenStream, CompileError> {
+    let CompileOptions {
+        runtime,
+        extras,
+        source,
+        modes,
+        uses_scanner,
+        uses_source,
+    } = options;
     let mut declared_modes = vec![Mode::new("INITIAL")];
     for mode in modes {
         if mode == "INITIAL"
