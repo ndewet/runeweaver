@@ -1,305 +1,187 @@
-# runeweaver
+# Runeweaver
+
+**A compile-time lexer generator for Rust.**
 
 [![CI](https://github.com/ndewet/runeweaver/actions/workflows/ci.yml/badge.svg)](https://github.com/ndewet/runeweaver/actions/workflows/ci.yml)
+[![crates.io](https://img.shields.io/crates/v/runeweaver.svg)](https://crates.io/crates/runeweaver)
+[![docs.rs](https://docs.rs/runeweaver/badge.svg)](https://docs.rs/runeweaver)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-`runeweaver` is a compile-time lexer generator for Rust. Describe tokens with regular
-expressions on an enum, derive `Lexer`, and scan strings with a generated
-deterministic finite automaton.
+Define your tokens as an enum. Runeweaver compiles their patterns into a
+deterministic finite automaton at build time and gives you an iterator over typed
+tokens. Use it to build parsers for programming languages, configuration formats,
+and domain-specific languages.
 
-- Longest-match token selection with declaration-order tie breaking
-- UTF-8 input, Unicode literals and character classes, and byte-accurate spans
-- A borrowed `&str` scanning API
-- Owned token payloads through `FromStr` or custom converters
-- Lexical modes for strings, interpolation, and nested comments
-- Recoverable errors for unrecognized input and invalid payloads
-- No runtime regular-expression engine
+- **Typed tokens:** borrow text directly from the input, parse values with
+  `FromStr`, or supply a custom converter.
+- **Predictable matching:** the longest match wins; declaration order breaks ties.
+- **Context-aware rules:** lexical modes handle strings, directives, and nested
+  comments. Scanner callbacks can access and update your own state.
+- **Useful diagnostics:** UTF-8 byte spans and recoverable errors connect tokens
+  back to their source.
+- **Compile-time generation:** no runtime regular-expression engine. Invalid
+  patterns, empty matches, and rules that can never win are rejected at build time.
 
-## Installation
+[API documentation](https://docs.rs/runeweaver) ·
+[Runnable examples](runeweaver/examples) ·
+[Report an issue](https://github.com/ndewet/runeweaver/issues)
 
-Packages are available on crates.io:
+## Get started
 
-- [`runeweaver`](https://crates.io/crates/runeweaver)
-- [`runeweaver-derive`](https://crates.io/crates/runeweaver-derive)
-- [`runeweaver-codegen`](https://crates.io/crates/runeweaver-codegen)
-
-Add `runeweaver` to your manifest:
+Add Runeweaver to your project. Rust **1.86 or newer** is required.
 
 ```toml
 [dependencies]
-runeweaver = "0.1"
+runeweaver = "0.2"
 ```
 
-`runeweaver` requires Rust 1.86 or newer.
-
-## Quick start
+Derive `Lexer` and give each variant a token pattern:
 
 ```rust
 use runeweaver::{Lexer, Span, Spanned};
 
 #[derive(Debug, PartialEq, Lexer)]
-#[lexer(skip = r"[ \t\r\n]+")]
-enum Token {
-    #[token("[A-Za-z_][A-Za-z0-9_]*")]
-    Identifier(String),
-
-    #[token("[0-9]+")]
-    Integer(u64),
-
-    #[token("==")]
-    Equal,
-}
-
-let tokens = Token::scan("answer == 42")
-    .spanned()
-    .collect::<Result<Vec<_>, _>>()
-    .expect("the input is valid");
-
-assert_eq!(
-    tokens,
-    vec![
-        Spanned {
-            token: Token::Identifier("answer".into()),
-            span: Span::new(0, 6),
-        },
-        Spanned {
-            token: Token::Equal,
-            span: Span::new(7, 9),
-        },
-        Spanned {
-            token: Token::Integer(42),
-            span: Span::new(10, 12),
-        },
-    ],
-);
-```
-
-Each enum variant defines one token rule. Unit variants produce token kinds;
-single-field tuple variants produce parsed or borrowed payloads. A `&str`
-payload borrows its text from the input. Other borrowed payloads require a
-converter. Struct variants and variants with multiple fields are rejected.
-
-## Matching semantics
-
-Rules are anchored at the scan's current position. The rule that consumes
-the most input wins. If several rules consume the same number of bytes, the
-rule declared first wins.
-
-This makes keywords and identifiers straightforward:
-
-```rust
-use runeweaver::Lexer;
-
-#[derive(Lexer)]
-enum Token {
-    #[token("if")]
-    If,
-
-    #[token("[A-Za-z_][A-Za-z0-9_]*")]
-    Identifier,
-}
-```
-
-`if` becomes `Token::If`, while `if_else` becomes one `Token::Identifier`.
-Patterns that can match an empty string are rejected because every lexer rule
-must make progress. A rule that can never win because an earlier rule always
-takes priority is also rejected.
-
-## Pattern syntax
-
-`runeweaver` implements the regular-language subset needed by lexers:
-
-| Syntax | Meaning |
-| --- | --- |
-| `abc` | Literal text |
-| `.` | Any Unicode scalar except newline |
-| `[abc]` | One character from a class |
-| `[a-z]` | One character from a range |
-| `[^a-z]` | One character outside a class |
-| <code>a&#124;b</code> | Alternation |
-| `(ab)` | Grouping |
-| `a?`, `a*`, `a+` | Optional, zero-or-more, and one-or-more |
-| `a{3}`, `a{2,}`, `a{2,5}` | Counted repetition |
-| `\n`, `\r`, `\t`, `\f`, `\v`, `\a` | Control-character escapes |
-| `\x7f`, `\x{1F600}` | Hexadecimal scalar escapes |
-| `\d`, `\w`, `\s` | ASCII digit, word, and whitespace classes |
-
-Punctuation can be escaped to match it literally. Non-ASCII literals and
-class ranges are supported directly. Shorthand classes are intentionally
-ASCII-defined.
-
-Anchors, look-around, backreferences, lazy quantifiers, capture modifiers,
-POSIX character classes, and octal escapes are not supported. Lexer rules are
-already anchored at the current position, and the generated matcher is a DFA,
-so features that require capture or backtracking state are outside the pattern
-model.
-
-## Payloads and converters
-
-By default, a tuple variant's field is parsed with `FromStr`:
-
-```rust
-use runeweaver::Lexer;
-
-#[derive(Lexer)]
-enum Token {
-    #[token("[0-9]+")]
-    Integer(u64),
-}
-```
-
-Use `with` when a lexeme needs custom conversion. A converter receives the
-matched text and may return the payload directly or return a `Result`:
-
-```rust
-use runeweaver::Lexer;
-
-#[derive(Lexer)]
-enum Token {
-    #[token("#[0-9a-fA-F]{6}", with = parse_color)]
-    Color(u32),
-}
-
-fn parse_color(text: &str) -> Result<u32, std::num::ParseIntError> {
-    u32::from_str_radix(&text[1..], 16)
-}
-```
-
-A failed `FromStr` or converter becomes `ScanError::InvalidPayload`. The
-scan consumes that lexeme, reports its span, and continues with subsequent
-input.
-
-A `&str` payload borrows the matched text from the scanner input:
-
-```rust
-use runeweaver::Lexer;
-
-#[derive(Debug, PartialEq, Lexer)]
+#[lexer(skip = r"\s+")]
 enum Token<'input> {
-    #[token("[a-z]+")]
-    Word(&'input str),
+    #[token("let")]
+    Let,
+
+    #[token("[a-zA-Z_][a-zA-Z0-9_]*")]
+    Identifier(&'input str),
+
+    #[token("=")]
+    Equals,
+
+    #[token("[0-9]+")]
+    Integer(u64),
 }
 
-let token = Token::scan("word").next().expect("one token")?;
-assert_eq!(token, Token::Word("word"));
-# Ok::<(), runeweaver::ScanError>(())
+fn main() -> Result<(), runeweaver::ScanError> {
+    let tokens = Token::scan("let answer = 42")
+        .spanned()
+        .collect::<Result<Vec<_>, _>>()?;
+
+    assert_eq!(
+        tokens,
+        vec![
+            Spanned { token: Token::Let, span: Span::new(0, 3) },
+            Spanned { token: Token::Identifier("answer"), span: Span::new(4, 10) },
+            Spanned { token: Token::Equals, span: Span::new(11, 12) },
+            Spanned { token: Token::Integer(42), span: Span::new(13, 15) },
+        ],
+    );
+    Ok(())
+}
 ```
 
-Use `with_scanner` when conversion needs scan state. Declare the state type
-with `extras`, then supply its initial value with `scan_with_extras`:
+The identifier borrows from the input; the integer is parsed into a `u64`.
+Skip rules consume text without emitting tokens. Omit `.spanned()` when you only
+need token values.
+
+## Matching rules
+
+Every `#[token("...")]` attribute is a regular expression, matched at the current
+input position. The rule that consumes the most input wins. For equally long
+matches, the rule declared first wins: in the example above, `let` is a keyword,
+while `letter` is a single identifier.
+
+Patterns support Unicode literals and character ranges, character classes and
+negation, grouping, alternation, and repetition (`?`, `*`, `+`, `{n}`, `{n,}`,
+`{n,m}`). Shorthand classes such as `\d`, `\w`, and `\s` use ASCII definitions.
+Escape regular-expression punctuation to match it literally, for example
+`#[token(r"\+")]` for a plus sign.
+
+Look-around, backreferences, and lazy quantifiers are unsupported. See the
+[pattern examples](runeweaver/examples/patterns.rs) for the supported constructs.
+
+## Token values and scanner state
+
+Use a unit variant for a token kind, or a single-field tuple variant for a value.
+A `&str` field borrows the matched text. Other fields use `FromStr` by default;
+`with` supplies a custom converter that returns either a value or a `Result`:
 
 ```rust
-use runeweaver::{Lexer, Scanner};
+use runeweaver::Lexer;
 
-#[derive(Debug, PartialEq, Lexer)]
-#[lexer(extras = usize)]
+#[derive(Lexer)]
 enum Token {
-    #[token("[a-z]+", with_scanner = count)]
-    Word,
+    #[token("0x[0-9a-fA-F]+", with = parse_hex)]
+    Hex(u64),
 }
 
-fn count(scanner: &mut Scanner<'_, Token, usize>) {
-    scanner.extras += 1;
+fn parse_hex(text: &str) -> Result<u64, std::num::ParseIntError> {
+    u64::from_str_radix(&text[2..], 16)
 }
-
-let mut scanner = Token::scan_with_extras("one two", 0);
-assert_eq!(scanner.next(), Some(Ok(Token::Word)));
-assert_eq!(scanner.extras, 1);
 ```
 
-A scanner converter can inspect `source`, `slice`, and `remainder`. It can use
-`bump` to include more input in the current match. A skip rule can also use
-`with_scanner` to update state without emitting a token.
+For conversion that needs scanner access, use `with_scanner`. Callbacks can read
+the matched `slice()` and `remainder()`, extend a match with `bump()`, and update
+`scanner.extras`. Declare the state type with `#[lexer(extras = MyState)]` and
+initialize it with `Token::scan_with_extras(input, state)`.
 
-## Spans and errors
-
-`Token::scan(input)` yields `Result<Token, ScanError>`. The scan retains the
-current range for `span()` and `slice()`. Add `.spanned()` to include each range
-in the iterator item.
-
-A `Span` is a half-open range of absolute UTF-8 byte offsets:
-
-```rust
-use runeweaver::Span;
-
-let span = Span::new(5, 7);
-assert_eq!(span.text("name 42"), Some("42"));
-assert_eq!(span.range(), 5..7);
-```
-
-Scanning distinguishes three input failures:
-
-- `Unrecognized` for a valid UTF-8 character accepted by no rule
-- `InvalidPayload` when token conversion fails
-- `UnterminatedMode` when input ends inside a pushed lexical mode
-
-Unrecognized input and payload failures are recoverable: the scan consumes the
-offending range and continues.
+See the [payload examples](runeweaver/examples/payloads.rs) and
+[`Scanner` reference](https://docs.rs/runeweaver/latest/runeweaver/struct.Scanner.html).
 
 ## Lexical modes
 
-Modes enable different rules in different contexts. Rules can replace the
-current mode with `begin`, push a nested mode with `push`, or return to the
-previous mode with `pop`:
+Modes select which rules are active. Use `begin` to switch modes, `push` to enter
+a nested context, and `pop` to return to the previous mode. For example, these
+skip rules handle nested block comments:
 
 ```rust
 use runeweaver::Lexer;
 
 #[derive(Lexer)]
 #[lexer(mode = Comment)]
+#[lexer(skip = r"\s+")]
 #[lexer(skip = r"/\*", push = Comment)]
 #[lexer(skip = r"/\*", modes = Comment, push = Comment)]
 #[lexer(skip = r"\*/", modes = Comment, pop)]
 #[lexer(skip = r"[^*/]+|[*/]", modes = Comment)]
-enum Token {
-    #[token("[A-Za-z_][A-Za-z0-9_]*")]
-    Identifier,
+enum Token<'input> {
+    #[token("[a-z]+")]
+    Word(&'input str),
 }
 ```
 
-This lexer skips arbitrarily nested block comments. Reaching end of input with
-a pushed mode still active produces `ScanError::UnterminatedMode` with the
-mode's name and the range from its opening rule through end of input.
+Rules without `modes` apply in the initial mode. If input ends while a pushed mode
+is still open, the scanner reports its name and the span from its opening rule
+through the end of input. The [modes example](runeweaver/examples/modes.rs) also
+demonstrates switching between contexts with `begin`.
 
-## Examples
+## Spans and error recovery
 
-The [`runeweaver/examples`](runeweaver/examples) directory contains runnable programs for:
+`Token::scan(input)` yields `Result<Token, ScanError>`. The scanner exposes the
+current match through `span()` and `slice()`; `.spanned()` yields
+`Result<Spanned<Token>, ScanError>` instead. Spans are half-open ranges of UTF-8
+byte offsets, suitable for slicing the original input or passing to a diagnostic
+renderer.
 
-- basic matching, skipped input, and rule priority;
-- automatic and custom payload conversion;
-- error reporting and recovery;
-- lexical modes and nested comments;
-- supported pattern constructs.
+| Error | Meaning |
+| --- | --- |
+| `Unrecognized` | No rule accepts the next character. |
+| `InvalidPayload` | A matched token's value could not be converted. |
+| `UnterminatedMode` | Input ended inside a pushed mode. |
 
-Run an example from the workspace root:
+Every error includes a span. Unrecognized characters and invalid payloads are
+consumed, so you can keep iterating to collect further tokens and diagnostics.
+Collecting into `Result<Vec<_>, _>`, as in the quick start, stops at the first error.
+See the [error recovery example](runeweaver/examples/errors.rs).
+
+## Explore and contribute
+
+The [examples directory](runeweaver/examples) contains small programs covering
+matching, payloads, modes, patterns, and errors. Run one from the repository root:
 
 ```console
 cargo run -p runeweaver --example modes
 ```
 
-## Stability and support
+Bug reports and pull requests are welcome on
+[GitHub](https://github.com/ndewet/runeweaver). For a bug report, include a small
+token definition, the input, and the expected and actual results.
 
-`runeweaver` is currently pre-1.0, but its release policy is stricter than
-Cargo's default compatibility rules for 0.x versions. Patch and minor releases
-preserve the documented public API; a breaking change requires a major release.
-Deprecated APIs will be called out in release notes when a practical migration
-path exists.
-
-The supported public surface is the `runeweaver` runtime crate and its re-exported
-derive macro. `runeweaver-codegen` is an implementation-facing crate and does not
-carry the same compatibility guarantee.
-
-Hidden runtime items connect generated code to the scanner. They are outside
-the supported public API. Use the derive macro instead of implementing its
-automaton interface by hand.
-
-Rust 1.86 is the minimum supported Rust version. Raising the MSRV requires at
-least a minor release. The latest release line receives bug fixes; there are no
-separate long-term-support branches. Report defects and support requests
-through the repository's GitHub issue tracker.
-
-## Development
-
-Run the same checks used by CI:
+To check a change locally:
 
 ```console
 cargo fmt --all -- --check
@@ -308,41 +190,22 @@ cargo test --workspace
 cargo test --workspace --release
 ```
 
-The benchmark suite measures lexer generation and scanning. Run it from the
-repository root:
+For performance work, see the [benchmark guide](benchmarks/README.md) for the
+generation and scanning suites and instructions for adding cases.
 
-```console
-cargo bench --manifest-path benchmarks/Cargo.toml
-```
+## Compatibility
 
-The suite uses Criterion for warm-up, sampling, bootstrap confidence intervals,
-and throughput reports. Its configuration uses a 99% confidence level and a 1%
-significance level. Input construction stays outside each measured operation.
+Until 1.0.0, only patch releases guarantee compatibility with the documented public
+API. Minor releases may introduce breaking changes. This guarantee covers the
+`runeweaver` runtime crate and its re-exported derive macro. The code generation
+crate and hidden interfaces used by generated code are outside that guarantee.
 
-Each pull request runs the same benchmark code against the base revision and
-the pull request revision on one runner. The check comments on the pull request
-with improvements and regressions whose complete 99% confidence interval is
-beyond 5%, and updates that comment on later runs. Regressions fail the check;
-uncertain changes and normal runner noise are omitted.
+Raising the minimum supported Rust version requires at least a minor release.
+Bug fixes target the latest release line.
 
-The [benchmark guide](benchmarks/README.md) explains how to add and design a
-benchmark.
+## License and acknowledgements
 
-## Releasing
+Runeweaver is licensed under the [MIT license](LICENSE).
 
-The dispatch-only `Release` GitHub Actions workflow publishes the three crates
-in dependency order. It needs a crates.io API token in the
-`CARGO_REGISTRY_TOKEN` repository secret.
-
-After the initial `v0.1.0` release, the workflow chooses the next version from
-conventional commits since the latest release tag. A breaking change (`!` or a
-`BREAKING CHANGE:` footer) bumps the major version, `feat` bumps the minor
-version, and `fix` bumps the patch version. Only the largest change is applied.
-
-## Acknowledgements
-
-Runeweaver's derive-based lexer declaration syntax was inspired by
-[Logos](https://github.com/maciejhirsz/logos). Runeweaver is an independent
-implementation with its own regex parser and automata pipeline, designed around
-borrowed string input, lexical modes, owned payloads, and structured error recovery.
-Runeweaver does not incorporate Logos source code.
+Thanks to [Logos](https://github.com/maciejhirsz/logos) for inspiring the
+derive-based token declaration syntax.
