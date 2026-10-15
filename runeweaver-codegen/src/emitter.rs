@@ -185,7 +185,7 @@ pub(crate) fn emit(
         fn __runeweaver_next #scanner_generics(
             scanner: &mut #runtime::Scanner<#source_lifetime, Self, #scanner_extras>,
             mode: usize,
-        ) -> Option<#lexer_runtime::ScanMatch<Self>>
+        ) -> #lexer_runtime::ScanStep<Self>
         #scanner_bounds
         {
             let input = #runtime::Scanner::source(scanner);
@@ -193,7 +193,7 @@ pub(crate) fn emit(
             loop {
                 if cursor == input.len() {
                     scanner.__set_position(cursor);
-                    return None;
+                    return #lexer_runtime::end();
                 }
                 let Some((rule, length)) = Self::__runeweaver_select(
                     &input.as_bytes()[cursor..],
@@ -206,7 +206,7 @@ pub(crate) fn emit(
                         .expect("the input is not empty")
                         .len_utf8();
                     scanner.__set_match(start, cursor);
-                    return Some(Err((
+                    return #lexer_runtime::matched(Err((
                         #runtime::ScanError::unrecognized(scanner.span()),
                         #lexer_runtime::ModeAction::Stay,
                     )));
@@ -224,7 +224,7 @@ pub(crate) fn emit(
                             _ => unreachable!("generated lexer selected an unknown rule"),
                         };
                         let (result, mode_action) = result;
-                        return Some(match result {
+                        return #lexer_runtime::matched(match result {
                             Ok(token) => Ok((token, mode_action)),
                             Err(error) => Err((
                                 #runtime::ScanError::invalid_payload(scanner.span(), error),
@@ -321,7 +321,7 @@ mod tests {
         )
         .to_string();
         assert!(actual.contains("0usize => Some (0usize)"));
-        assert!(actual.contains("Option < :: runeweaver :: lexer :: ScanMatch < Self >>"));
+        assert!(actual.contains(":: runeweaver :: lexer :: ScanStep < Self >"));
         assert!(actual.contains("fn __runeweaver_mode_name"));
         assert!(actual.contains("fn __runeweaver_transition"));
         assert!(actual.contains("fn __runeweaver_accept"));

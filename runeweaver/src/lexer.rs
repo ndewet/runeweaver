@@ -2,9 +2,29 @@
 
 use crate::Scanner;
 
-/// A generated scan result and its mode action.
+/// Stores a matched rule and its mode action.
 #[doc(hidden)]
 pub type ScanMatch<T> = Result<(Option<T>, ModeAction), (crate::ScanError, ModeAction)>;
+
+/// Identifies a completed match or the end of input.
+///
+/// The alias preserves the nested result representation used during scanning.
+#[doc(hidden)]
+pub type ScanStep<T> = Option<ScanMatch<T>>;
+
+/// Returns a completed rule, including skipped input or a scan error.
+#[doc(hidden)]
+#[inline(always)]
+pub fn matched<T>(result: ScanMatch<T>) -> ScanStep<T> {
+    Some(result)
+}
+
+/// Returns the end marker after all input is consumed.
+#[doc(hidden)]
+#[inline(always)]
+pub fn end<T>() -> ScanStep<T> {
+    None
+}
 
 /// A generated lexer rule's update to the mode stack.
 #[doc(hidden)]
@@ -29,10 +49,8 @@ pub trait Automaton<'input>: Sized {
     /// User state stored in this token type's scanner.
     type Extras;
 
-    fn next_token(
-        scanner: &mut Scanner<'input, Self, Self::Extras>,
-        mode: usize,
-    ) -> Option<ScanMatch<Self>>;
+    fn next_token(scanner: &mut Scanner<'input, Self, Self::Extras>, mode: usize)
+    -> ScanStep<Self>;
     fn mode_name(mode: usize) -> &'static str;
 }
 

@@ -2,10 +2,46 @@
 
 #![deny(dead_code)]
 
+#[cfg(debug_assertions)]
+use runeweaver::lexer::ScanStep;
 use runeweaver::lexer::{Automaton, ModeAction};
 use runeweaver::{Lexer, ScanError, Scanner, Span, Spanned};
 use std::convert::Infallible;
 use std::str::FromStr;
+
+#[cfg(debug_assertions)]
+struct InvalidAutomaton;
+
+#[cfg(debug_assertions)]
+impl<'input> Automaton<'input> for InvalidAutomaton {
+    type Extras = bool;
+
+    fn next_token(scanner: &mut Scanner<'input, Self, bool>, _: usize) -> ScanStep<Self> {
+        if scanner.extras {
+            runeweaver::lexer::end()
+        } else {
+            runeweaver::lexer::matched(Ok((None, ModeAction::Stay)))
+        }
+    }
+
+    fn mode_name(_: usize) -> &'static str {
+        "INITIAL"
+    }
+}
+
+#[test]
+#[cfg(debug_assertions)]
+#[should_panic(expected = "a generated match must consume input")]
+fn scanner_rejects_a_match_without_progress() {
+    let _ = InvalidAutomaton::scan_with_extras("a", false).next();
+}
+
+#[test]
+#[cfg(debug_assertions)]
+#[should_panic(expected = "invalid generated end position")]
+fn scanner_rejects_end_before_the_input_length() {
+    let _ = InvalidAutomaton::scan_with_extras("a", true).next();
+}
 
 fn first<'input, T: Lexer<'input>>(input: &'input str) -> Option<(T, usize)>
 where

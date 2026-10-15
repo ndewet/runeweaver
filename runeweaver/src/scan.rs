@@ -465,11 +465,20 @@ impl<'input, T: Lexer<'input>> Scanner<'input, T, T::Extras> {
             }
 
             let mode = self.mode.id;
+            let position = self.offset;
             let result = T::next_token(self, mode);
             let Some(result) = result else {
+                debug_assert_eq!(
+                    self.offset,
+                    self.input.len(),
+                    "invalid generated end position"
+                );
                 continue;
             };
-
+            debug_assert!(
+                self.offset > position,
+                "a generated match must consume input"
+            );
             let start = self.span.start;
             match result {
                 Ok((token, mode_action)) => {
