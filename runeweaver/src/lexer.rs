@@ -16,7 +16,14 @@ pub enum ModeAction {
     Pop,
 }
 
-/// The byte-oriented automaton supplied by a generated lexer.
+/// Connects a generated lexer to its scanner.
+///
+/// This trait belongs to the generated-code interface. Handwritten
+/// implementations are outside the supported public API.
+///
+/// A generated match consumes input and sets a valid UTF-8 span. A generated
+/// end result moves the position to the input length. Mode identifiers refer
+/// to the generated lexer's mode table.
 #[doc(hidden)]
 pub trait Automaton<'input>: Sized {
     /// User state stored in this token type's scanner.
@@ -31,7 +38,8 @@ pub trait Automaton<'input>: Sized {
 
 /// Scans UTF-8 input with a generated lexer.
 ///
-/// Only the [`Lexer`](macro@crate::Lexer) derive macro implements this trait.
+/// Use the [`Lexer`](macro@crate::Lexer) derive macro to implement this trait.
+/// Handwritten implementations of its generated-code interface are unsupported.
 ///
 /// # Examples
 ///

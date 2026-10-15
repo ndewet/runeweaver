@@ -326,7 +326,7 @@ impl<'input, T, Extras> Scanner<'input, T, Extras> {
     ///
     /// # Panics
     ///
-    /// Panics if a manually implemented [`Lexer`] reports a span outside its input.
+    /// This function panics if generated code reports an invalid input span.
     ///
     /// # Examples
     ///
