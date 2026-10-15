@@ -377,6 +377,53 @@ pub struct SpannedScan<'input, T, Extras = ()> {
     scan: Scanner<'input, T, Extras>,
 }
 
+impl<'input, T, Extras> SpannedScan<'input, T, Extras> {
+    /// Returns the scanner for source and state inspection.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use runeweaver::Lexer;
+    /// #[derive(Lexer)]
+    /// enum Token { #[token("a")] A }
+    /// assert_eq!(Token::scan("a").spanned().scanner().source(), "a");
+    /// ```
+    pub const fn scanner(&self) -> &Scanner<'input, T, Extras> {
+        &self.scan
+    }
+
+    /// Returns the scanner to change its state.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use runeweaver::Lexer;
+    /// #[derive(Lexer)]
+    /// #[lexer(extras = usize)]
+    /// enum Token { #[token("a")] A }
+    /// let mut scan = Token::scan("a").spanned();
+    /// scan.scanner_mut().extras = 3;
+    /// assert_eq!(scan.scanner().extras, 3);
+    /// ```
+    pub fn scanner_mut(&mut self) -> &mut Scanner<'input, T, Extras> {
+        &mut self.scan
+    }
+
+    /// Returns the scanner to continue without attached spans.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use runeweaver::Lexer;
+    /// #[derive(Lexer)]
+    /// enum Token { #[token("a")] A }
+    /// assert_eq!(Token::scan("a").spanned().into_scanner().count(), 1);
+    /// ```
+    pub fn into_scanner(self) -> Scanner<'input, T, Extras> {
+        self.scan
+    }
+}
+
 impl<'input, T: Lexer<'input>> Scanner<'input, T, T::Extras> {
     #[inline(always)]
     fn apply_mode_action(&mut self, action: ModeAction, start: usize) {
