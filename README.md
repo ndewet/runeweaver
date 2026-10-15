@@ -195,10 +195,10 @@ generation and scanning suites and instructions for adding cases.
 
 ## Compatibility
 
-Runeweaver is pre-1.0. Patch and minor releases preserve the documented public API;
-breaking changes require a major release. This guarantee covers the `runeweaver`
-runtime crate and its re-exported derive macro. The code generation crate and
-hidden interfaces used by generated code are outside that guarantee.
+Until 1.0.0, only patch releases guarantee compatibility with the documented public
+API. Minor releases may introduce breaking changes. This guarantee covers the
+`runeweaver` runtime crate and its re-exported derive macro. The code generation
+crate and hidden interfaces used by generated code are outside that guarantee.
 
 Raising the minimum supported Rust version requires at least a minor release.
 Bug fixes target the latest release line.
