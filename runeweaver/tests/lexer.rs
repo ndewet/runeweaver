@@ -2,7 +2,9 @@
 
 #![deny(dead_code)]
 
-use runeweaver::lexer::{Automaton, ModeAction, ScanStep};
+#[cfg(debug_assertions)]
+use runeweaver::lexer::ScanStep;
+use runeweaver::lexer::{Automaton, ModeAction};
 use runeweaver::{Lexer, ScanError, Scanner, Span, Spanned};
 use std::convert::Infallible;
 use std::str::FromStr;
@@ -16,12 +18,9 @@ impl<'input> Automaton<'input> for InvalidAutomaton {
 
     fn next_token(scanner: &mut Scanner<'input, Self, bool>, _: usize) -> ScanStep<Self> {
         if scanner.extras {
-            ScanStep::End
+            runeweaver::lexer::end()
         } else {
-            ScanStep::Matched {
-                result: Ok(None),
-                action: ModeAction::Stay,
-            }
+            runeweaver::lexer::matched(Ok((None, ModeAction::Stay)))
         }
     }
 
@@ -131,19 +130,14 @@ where
     T::start_state(mode)?;
     let mut scanner = Scanner::<T, <T as Automaton<'input>>::Extras>::new(input);
     match T::next_token(&mut scanner, mode) {
-        ScanStep::Matched {
-            result: Ok(token),
-            action: mode_action,
-        } => Some(Ok((
+        Some(Ok((token, mode_action))) => Some(Ok((
             RuleOutput { token, mode_action },
             0,
             scanner.position(),
         ))),
-        ScanStep::Matched {
-            result: Err(error), ..
-        } => Some(Err((error, scanner.span().start, scanner.span().end))),
-        ScanStep::End if scanner.position() != 0 => Some(Ok((stay(None), 0, scanner.position()))),
-        ScanStep::End => None,
+        Some(Err((error, _))) => Some(Err((error, scanner.span().start, scanner.span().end))),
+        None if scanner.position() != 0 => Some(Ok((stay(None), 0, scanner.position()))),
+        None => None,
     }
 }
 

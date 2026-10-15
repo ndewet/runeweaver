@@ -1,6 +1,6 @@
 //! Token iteration and recoverable scan errors.
 
-use crate::lexer::{ModeAction, ScanStep};
+use crate::lexer::ModeAction;
 use crate::payload::PayloadError;
 use crate::{Lexer, Span, Spanned};
 use std::fmt::{Display, Formatter};
@@ -466,25 +466,30 @@ impl<'input, T: Lexer<'input>> Scanner<'input, T, T::Extras> {
 
             let mode = self.mode.id;
             let position = self.offset;
-            match T::next_token(self, mode) {
-                ScanStep::End => {
-                    debug_assert_eq!(
-                        self.offset,
-                        self.input.len(),
-                        "invalid generated end position"
-                    );
-                }
-                ScanStep::Matched { result, action } => {
-                    debug_assert!(
-                        self.offset > position,
-                        "a generated match must consume input"
-                    );
-                    self.apply_mode_action(action, self.span.start);
-                    match result {
-                        Ok(Some(token)) => return Some(Ok(token)),
-                        Ok(None) => {}
-                        Err(error) => return Some(Err(error)),
+            let result = T::next_token(self, mode);
+            let Some(result) = result else {
+                debug_assert_eq!(
+                    self.offset,
+                    self.input.len(),
+                    "invalid generated end position"
+                );
+                continue;
+            };
+            debug_assert!(
+                self.offset > position,
+                "a generated match must consume input"
+            );
+            let start = self.span.start;
+            match result {
+                Ok((token, mode_action)) => {
+                    self.apply_mode_action(mode_action, start);
+                    if let Some(token) = token {
+                        return Some(Ok(token));
                     }
+                }
+                Err((error, mode_action)) => {
+                    self.apply_mode_action(mode_action, start);
+                    return Some(Err(error));
                 }
             }
         }

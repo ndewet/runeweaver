@@ -2,18 +2,28 @@
 
 use crate::Scanner;
 
-/// Identifies a completed match or the end of input.
+/// Stores a matched rule and its mode action.
 #[doc(hidden)]
-pub enum ScanStep<T> {
-    /// Consumes a rule or an unrecognized character.
-    Matched {
-        /// The emitted token, skipped input, or scan error.
-        result: Result<Option<T>, crate::ScanError>,
-        /// The mode action, including when conversion fails.
-        action: ModeAction,
-    },
-    /// Ends the scan at the input length.
-    End,
+pub type ScanMatch<T> = Result<(Option<T>, ModeAction), (crate::ScanError, ModeAction)>;
+
+/// Identifies a completed match or the end of input.
+///
+/// The alias preserves the nested result representation used during scanning.
+#[doc(hidden)]
+pub type ScanStep<T> = Option<ScanMatch<T>>;
+
+/// Returns a completed rule, including skipped input or a scan error.
+#[doc(hidden)]
+#[inline(always)]
+pub fn matched<T>(result: ScanMatch<T>) -> ScanStep<T> {
+    Some(result)
+}
+
+/// Returns the end marker after all input is consumed.
+#[doc(hidden)]
+#[inline(always)]
+pub fn end<T>() -> ScanStep<T> {
+    None
 }
 
 /// A generated lexer rule's update to the mode stack.

@@ -52,7 +52,10 @@ use syn::{
 /// #     Push(usize),
 /// #     Pop,
 /// # }
-/// # pub enum ScanStep<T> { Matched { result: Result<Option<T>, crate::ScanError>, action: ModeAction }, End }
+/// # pub type ScanMatch<T> = Result<(Option<T>, ModeAction), (crate::ScanError, ModeAction)>;
+/// # pub type ScanStep<T> = Option<ScanMatch<T>>;
+/// # pub fn matched<T>(result: ScanMatch<T>) -> ScanStep<T> { Some(result) }
+/// # pub fn end<T>() -> ScanStep<T> { None }
 /// # pub trait Automaton<'input>: Sized {
 /// #     type Extras;
 /// #     fn next_token(scanner: &mut crate::Scanner<'input, Self, Self::Extras>, mode: usize) -> ScanStep<Self>;

@@ -193,7 +193,7 @@ pub(crate) fn emit(
             loop {
                 if cursor == input.len() {
                     scanner.__set_position(cursor);
-                    return #lexer_runtime::ScanStep::End;
+                    return #lexer_runtime::end();
                 }
                 let Some((rule, length)) = Self::__runeweaver_select(
                     &input.as_bytes()[cursor..],
@@ -206,10 +206,10 @@ pub(crate) fn emit(
                         .expect("the input is not empty")
                         .len_utf8();
                     scanner.__set_match(start, cursor);
-                    return #lexer_runtime::ScanStep::Matched {
-                        result: Err(#runtime::ScanError::unrecognized(scanner.span())),
-                        action: #lexer_runtime::ModeAction::Stay,
-                    };
+                    return #lexer_runtime::matched(Err((
+                        #runtime::ScanError::unrecognized(scanner.span()),
+                        #lexer_runtime::ModeAction::Stay,
+                    )));
                 };
                 let rule = rule.get() - 1;
                 let end = cursor + length;
@@ -224,12 +224,13 @@ pub(crate) fn emit(
                             _ => unreachable!("generated lexer selected an unknown rule"),
                         };
                         let (result, mode_action) = result;
-                        return #lexer_runtime::ScanStep::Matched {
-                            result: result.map_err(|error| {
-                                #runtime::ScanError::invalid_payload(scanner.span(), error)
-                            }),
-                            action: mode_action,
-                        };
+                        return #lexer_runtime::matched(match result {
+                            Ok(token) => Ok((token, mode_action)),
+                            Err(error) => Err((
+                                #runtime::ScanError::invalid_payload(scanner.span(), error),
+                                mode_action,
+                            )),
+                        });
                     }
                 }
             }
