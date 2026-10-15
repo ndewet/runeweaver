@@ -91,6 +91,46 @@ fn scanner_keeps_user_state_while_it_scans() {
     assert_eq!(scanner.remainder(), "b");
 }
 
+#[test]
+fn scanner_defaults_use_the_tokens_declared_extras() {
+    let mut scanner: Scanner<'_, StatefulCallbacks> = Scanner::new("word");
+    assert_eq!(scanner.next(), Some(Ok(StatefulCallbacks::Word)));
+    assert_eq!(scanner.extras, 4);
+    let mut spanned: runeweaver::SpannedScan<'_, StatefulCallbacks> = scanner.spanned();
+    spanned.scanner_mut().extras = 7;
+    assert_eq!(spanned.into_scanner().extras, 7);
+}
+
+#[test]
+fn explicit_scanner_extras_remain_available_for_source_inspection() {
+    let scanner = Scanner::<Token, bool>::with_extras("aaa", true);
+    assert_eq!(scanner.source(), "aaa");
+    assert_eq!(scanner.span(), Span::at(0));
+    assert!(scanner.spanned().into_scanner().extras);
+}
+
+#[derive(Debug, PartialEq, Lexer)]
+#[lexer(extras = usize)]
+enum DefaultBorrowedExtras<'input> {
+    #[token("[a-z]+", with_scanner = borrow_with_default_extras)]
+    Word(&'input str),
+}
+
+fn borrow_with_default_extras<'input>(
+    scanner: &mut Scanner<'input, DefaultBorrowedExtras<'input>>,
+) -> &'input str {
+    scanner.extras += 1;
+    scanner.slice()
+}
+
+#[test]
+fn borrowed_callbacks_use_default_scanner_extras() {
+    let input = String::from("word");
+    let mut scan = DefaultBorrowedExtras::scan(&input);
+    assert_eq!(scan.next(), Some(Ok(DefaultBorrowedExtras::Word(&input))));
+    assert_eq!(scan.extras, 1);
+}
+
 #[derive(Debug, PartialEq, Lexer)]
 enum GenericExtrasToken<Extras: FromStr<Err = std::num::ParseIntError>> {
     #[token("[0-9]+")]
